@@ -53,7 +53,7 @@ rule. It will ask for `sudo`.
 Then, for Python:
 
 ```bash
-git clone https://github.com/ultraleap/leapc-python-bindings.git
+git clone https://github.com/ohora23/leapc-python-bindings.git
 cd leapc-python-bindings
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt          # build, cffi, opencv-python, numpy
@@ -63,6 +63,14 @@ pip install leapc-cffi/dist/leapc_cffi-0.0.1-*.whl
 pip install -e leapc-python-api
 python ../leap-motion-linux-revival/examples/live_visualizer.py
 ```
+
+We clone from [`ohora23/leapc-python-bindings`](https://github.com/ohora23/leapc-python-bindings)
+— an unmodified fork of the original
+[`ultraleap/leapc-python-bindings`](https://github.com/ultraleap/leapc-python-bindings) —
+rather than the upstream org directly. Given Ultraleap the company no longer
+exists (see above), there's a real risk the `ultraleap` GitHub org itself gets
+deleted or archived someday the way `repo.ultraleap.com` already has; this fork
+is a preservation copy so the Quickstart above keeps working either way.
 
 (The bindings repo ships a precompiled module, but only for Python 3.8 — on
 anything newer, e.g. Ubuntu 24.04's Python 3.12, you need to build it yourself
@@ -137,14 +145,15 @@ original and MIT-licensed — see [`LICENSE`](LICENSE).
 
 `examples/*.py` use the `leap` Python module from
 [`ultraleap/leapc-python-bindings`](https://github.com/ultraleap/leapc-python-bindings)
-(Apache License 2.0) — that package is **not vendored in this repo**; the
-Quickstart above has you `git clone` it separately from Ultraleap's own
-repository, so its license applies to it independently and isn't affected by
-this repo's MIT license. The example scripts themselves were written from
-scratch for this project (not copied from that repo's own examples) — they
-just follow the `leap.Listener` subclassing pattern the library's API
-requires, which is standard usage boilerplate rather than copyrightable
-expression.
+(Apache License 2.0), cloned via our unmodified preservation fork
+[`ohora23/leapc-python-bindings`](https://github.com/ohora23/leapc-python-bindings) —
+that package is **not vendored in this repo**; the Quickstart above has you
+`git clone` it separately, so its license applies to it independently (still
+Apache 2.0, unchanged by forking) and isn't affected by this repo's MIT
+license. The example scripts themselves were written from scratch for this
+project (not copied from that repo's own examples) — they just follow the
+`leap.Listener` subclassing pattern the library's API requires, which is
+standard usage boilerplate rather than copyrightable expression.
 
 ## Contributing
 

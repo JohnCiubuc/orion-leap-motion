@@ -96,4 +96,5 @@ without the physical device attached.
 ## Reference
 
 Full API source: https://github.com/ultraleap/leapc-python-bindings
+(preservation fork, used by this repo's Quickstart: https://github.com/ohora23/leapc-python-bindings)
 (`leapc-python-api/src/leap/`)

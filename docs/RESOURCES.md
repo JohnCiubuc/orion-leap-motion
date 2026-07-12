@@ -46,7 +46,10 @@ to SIM IP. Practical fallout:
 ## 2. Language bindings / APIs
 
 - **LeapC Python bindings** — the recommended way to script against Gemini.
-  Source: https://github.com/ultraleap/leapc-python-bindings
+  Upstream: https://github.com/ultraleap/leapc-python-bindings — we clone from
+  our preservation fork instead, https://github.com/ohora23/leapc-python-bindings
+  (unmodified, Apache 2.0), in case the `ultraleap` org ever disappears like
+  `repo.ultraleap.com` did.
   Full API capability breakdown: [`SDK_CAPABILITIES.md`](SDK_CAPABILITIES.md).
 - **C API (LeapC)**: `/usr/include/LeapC.h` + `libLeapC.so` — native C/C++ apps
   can link directly. Sample ships at
