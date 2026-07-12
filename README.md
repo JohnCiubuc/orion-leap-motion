@@ -23,9 +23,10 @@ anyone who still has one of these devices sitting in a drawer.
 ![Live two-hand skeleton tracking demo](docs/demo.gif)
 
 Real-time output of [`examples/live_visualizer.py`](examples/live_visualizer.py) —
-both hands tracked simultaneously, palm + finger-bone skeleton, live
-pinch/grab scores overlaid. No Unity, no official Control Panel (see below
-for why that doesn't work), just the LeapC Python bindings + OpenCV.
+raw IR camera feed (the actual captured hand shape) side by side with the
+palm + finger-bone skeleton and live pinch/grab scores, both hands tracked
+simultaneously. No Unity, no official Control Panel (see below for why that
+doesn't work), just the LeapC Python bindings + OpenCV.
 
 ## What's here
 
@@ -34,7 +35,7 @@ for why that doesn't work), just the LeapC Python bindings + OpenCV.
 | [`install.sh`](install.sh) | Fetches the Gemini v5.17.1.0 `.deb`s from the Wayback Machine, installs them, and applies the udev fix below |
 | [`udev/99-leapmotion-fix.rules`](udev/99-leapmotion-fix.rules) | Corrects the broken vendor udev rule (see "The udev bug" below) |
 | [`examples/hand_test.py`](examples/hand_test.py) | Minimal script printing pinch/grab scores + finger-extension state per frame |
-| [`examples/live_visualizer.py`](examples/live_visualizer.py) | Real-time OpenCV skeleton visualization (palm + finger bones, pinch/grab overlay) — replaces the official Control Panel visualizer, which fails to launch (see below) |
+| [`examples/live_visualizer.py`](examples/live_visualizer.py) | Real-time OpenCV visualization: raw IR camera feed + skeleton (palm, finger bones, pinch/grab overlay) side by side — replaces the official Control Panel visualizer, which fails to launch (see below) |
 | [`docs/RESOURCES.md`](docs/RESOURCES.md) | Curated list of every SDK/driver/binding/community-project resource we found for this device |
 | [`docs/SDK_CAPABILITIES.md`](docs/SDK_CAPABILITIES.md) | What the LeapC/Gemini API actually exposes (skeletal tracking fields, raw stereo images, multi-device, recording/playback, etc.), read straight from the `leapc-python-bindings` source and verified against real hardware |
 
