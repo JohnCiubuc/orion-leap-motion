@@ -32,11 +32,22 @@ confidence in the 0.6–0.85 range, ~114 FPS.
 
 ## 2. Raw camera images (`ImageEvent`, no LeapUVC needed)
 
-Enabling the images policy flag gets you `ImageEvent.image`: the **raw stereo
-IR camera frame pair**, streamed straight through the service. This means you
-can do your own CV/ML work (custom hand models, depth estimation, ArUco
-marker tracking, etc.) without touching LeapUVC at all — LeapUVC is only
-needed if you want to bypass the tracking service entirely.
+Enabling the images policy flag (`connection.set_policy_flags(flags_to_set=[PolicyFlag.Images])`)
+gets you `ImageEvent.image`: the **raw stereo IR camera frame pair**
+(640×240, 8-bit grayscale on the original controller), streamed straight
+through the service. This means you can do your own CV/ML work (custom hand
+models, depth estimation, ArUco marker tracking, etc.) without touching
+LeapUVC at all — LeapUVC is only needed if you want to bypass the tracking
+service entirely.
+
+The Python bindings' `Image` wrapper only exposes `matrix_version` — to get
+actual pixel bytes you need to reach into the raw cffi struct yourself
+(`image.c_data.properties` for width/height/bpp, `image.c_data.data` +
+`.offset` for the pixel buffer via `ffi.buffer(...)`, copied out immediately
+since the source buffer is only valid until the next poll). See
+`examples/live_visualizer.py`'s `image_to_array()` for a working
+implementation — that's what produces the raw camera panel in this repo's
+demo GIF.
 
 ## 3. Multi-device support
 
