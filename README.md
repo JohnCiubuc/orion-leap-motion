@@ -18,6 +18,15 @@ working on a modern Linux box (tested on Ubuntu 24.04) anyway, using an
 signup, nothing proprietary redistributed here. It's for fellow developers and
 anyone who still has one of these devices sitting in a drawer.
 
+## Demo
+
+![Live two-hand skeleton tracking demo](docs/demo.gif)
+
+Real-time output of [`examples/live_visualizer.py`](examples/live_visualizer.py) —
+both hands tracked simultaneously, palm + finger-bone skeleton, live
+pinch/grab scores overlaid. No Unity, no official Control Panel (see below
+for why that doesn't work), just the LeapC Python bindings + OpenCV.
+
 ## What's here
 
 | Path | What |
