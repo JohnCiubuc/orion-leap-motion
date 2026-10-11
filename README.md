@@ -13,7 +13,7 @@ Motion Controller** (USB `f182:0003`) work on Linux is now dead or broken:
   **udev rule is malformed** and silently denies USB access — see below.
 
 This repo collects everything needed to get the original Leap Motion Controller
-working on a modern Linux box (tested on Ubuntu 24.04) anyway, using an
+working on a modern Linux box (Ubuntu 24.04, and Arch Linux on Wayland/Hyprland) anyway, using an
 **archived (Wayback Machine) snapshot of the dead apt repo** — no account, no
 signup, nothing proprietary redistributed here. It's for fellow developers and
 anyone who still has one of these devices sitting in a drawer.
@@ -32,8 +32,11 @@ doesn't work), just the LeapC Python bindings + OpenCV.
 
 | Path | What |
 |---|---|
-| [`install.sh`](install.sh) | Fetches the Gemini v5.17.1.0 `.deb`s from the Wayback Machine, installs them, and applies the udev fix below |
-| [`udev/99-leapmotion-fix.rules`](udev/99-leapmotion-fix.rules) | Corrects the broken vendor udev rule (see "The udev bug" below) |
+| [`install.sh`](install.sh) | Fetches the Gemini v5.17.1.0 `.deb`s from the Wayback Machine and installs them: as a real pacman package on Arch, via `dpkg` on Debian/Ubuntu. Applies the udev fix below and enables the service |
+| [`packaging/arch/`](packaging/arch/) | `PKGBUILD` that repackages the `.deb`s for Arch (merged-`/usr` layout, `leap` user via sysusers.d, fixed udev rule, control-panel lock fix) |
+| [`scripts/setup-python.sh`](scripts/setup-python.sh) | Creates `.venv`, builds the LeapC Python bindings against the installed service, installs example deps |
+| [`scripts/inspect-debs.sh`](scripts/inspect-debs.sh) | Unpacks the archived `.deb`s and reports checksums, dependencies, maintainer scripts and missing shared libraries (for maintaining the PKGBUILD) |
+| [`udev/99-leapmotion-fix.rules`](udev/99-leapmotion-fix.rules) | Corrects the broken vendor udev rule on Debian/Ubuntu (see "The udev bug" below) |
 | [`examples/hand_test.py`](examples/hand_test.py) | Minimal script printing pinch/grab scores + finger-extension state per frame |
 | [`examples/live_visualizer.py`](examples/live_visualizer.py) | Real-time OpenCV visualization: raw IR camera feed + skeleton (palm, finger bones, pinch/grab overlay) side by side — replaces the official Control Panel visualizer, which fails to launch (see below) |
 | [`docs/RESOURCES.md`](docs/RESOURCES.md) | Curated list of every SDK/driver/binding/community-project resource we found for this device |
@@ -44,14 +47,21 @@ doesn't work), just the LeapC Python bindings + OpenCV.
 ```bash
 git clone https://github.com/ohora23/leap-motion-linux-revival.git
 cd leap-motion-linux-revival
-./install.sh
+./install.sh                 # add --no-control-panel to skip the Unity GUI
+./scripts/setup-python.sh    # venv + LeapC Python bindings
+source .venv/bin/activate
+python examples/live_visualizer.py
 ```
 
-This downloads and installs `ultraleap-hand-tracking-service` 5.17.1.0 +
-`ultraleap-hand-tracking-control-panel` 3.4.1, and installs the corrected udev
-rule. It will ask for `sudo`.
+`install.sh` detects your distro. On **Arch** it builds pacman packages from
+[`packaging/arch/PKGBUILD`](packaging/arch/PKGBUILD) (needs `base-devel`) and
+installs them with `pacman -U`. On **Debian/Ubuntu** it installs the `.deb`s
+with `dpkg`. Either way you get `ultraleap-hand-tracking-service` 5.17.1.0 (+
+`ultraleap-hand-tracking-control-panel` 3.4.1), a working udev rule, and the
+service enabled at boot. It will ask for `sudo`. Run it as your normal user.
 
-Then, for Python:
+<details>
+<summary>Manual Python setup (what <code>scripts/setup-python.sh</code> does)</summary>
 
 ```bash
 git clone https://github.com/ohora23/leapc-python-bindings.git
@@ -65,6 +75,8 @@ pip install -e leapc-python-api
 python ../leap-motion-linux-revival/examples/live_visualizer.py
 ```
 
+</details>
+
 We clone from [`ohora23/leapc-python-bindings`](https://github.com/ohora23/leapc-python-bindings)
 — an unmodified fork of the original
 [`ultraleap/leapc-python-bindings`](https://github.com/ultraleap/leapc-python-bindings) —
@@ -76,6 +88,55 @@ is a preservation copy so the Quickstart above keeps working either way.
 (The bindings repo ships a precompiled module, but only for Python 3.8 — on
 anything newer, e.g. Ubuntu 24.04's Python 3.12, you need to build it yourself
 as above. It just works once you do; no code changes needed.)
+
+## Arch Linux + Wayland (Hyprland) notes
+
+- **Packaging, not `dpkg`.** Arch has no `dpkg`/`apt`, and extracting a `.deb`
+  over `/` would leave files pacman doesn't know about. The PKGBUILD unpacks the
+  archived `.deb`s and fixes what doesn't fit Arch:
+  - Debian's `/lib`, `/sbin` and `/usr/sbin` trees move under `/usr/lib` and
+    `/usr/bin`. On Arch those top-level paths are symlinks, and pacman refuses
+    packages that ship files there.
+  - Debian maintainer scripts don't run under pacman, so the package
+    reimplements them:
+    - the `leap` service user comes from `sysusers.d`;
+    - ownership of `/etc/ultraleap`, `/var/log/ultraleap` and
+      `/usr/share/ultraleap` comes from `tmpfiles.d`;
+    - the config file is seeded at build time instead of from
+      `/usr/TrackingService`;
+    - the `libLeapC.so` links go in `/usr/lib` instead of Debian's multiarch
+      directory.
+
+    The originals are kept for reference in
+    `/usr/share/doc/ultraleap-hand-tracking-service/debian/`.
+  - **EULA.** On Debian the package asked for licence acceptance during install
+    and ran `leapctl eula -y`. pacman can't ask questions, so `install.sh` asks
+    after starting the service (or pass `--accept-eula`). By hand: `leapctl eula`
+    to read it, `leapctl eula -y` to accept.
+  - The vendor's broken `99-LMC.rules`, `99-LMC2.rules` and `99-SIR170.rules`
+    (all with the same bug, and Arch has no `plugdev` group either) are dropped
+    and replaced with `70-leapmotion.rules`:
+    `GROUP="leap", MODE="0660", TAG+="uaccess"`. The service user gets
+    read/write access, your logged-in desktop session gets an ACL, and the
+    device isn't world-writable.
+  - The control panel's `unity.lock` ships writable, so the GUI can start.
+
+  Uninstall with `sudo pacman -R ultraleap-hand-tracking-control-panel ultraleap-hand-tracking-service`.
+- **Python.** Arch's system Python is externally managed (PEP 668), so
+  everything goes in `.venv`. `setup-python.sh` builds the bindings against
+  whatever Python version you have.
+- **Wayland.** The tracking service is headless and doesn't care about the
+  display server. The GUI pieces are X11 clients and run under **XWayland**
+  (enabled by default on Hyprland):
+  - `examples/live_visualizer.py` uses pip's `opencv-python`, whose bundled Qt
+    has only the X11 (`xcb`) backend. The script sets `QT_QPA_PLATFORM=xcb`
+    automatically when it detects Wayland. Set the variable yourself to
+    override.
+  - The Unity control panel is an X11 app too.
+- **Checking the device.** `lsusb` comes from `usbutils`, which a minimal Arch
+  install lacks. `install.sh` falls back to sysfs. You can also check with
+  `udevadm info -q property -n /dev/bus/usb/<bus>/<dev>` and
+  `getfacl /dev/bus/usb/<bus>/<dev>`.
 
 ## The udev bug
 
@@ -98,8 +159,9 @@ unprivileged `leap` system user — can never open it:
 [console] open()#375:  Failed to open the LMC, due to: Failed to read value from address: 98
 ```
 
-Fix: add a corrected rule as an override (don't touch the vendor file) —
-`install.sh` does this automatically, or run it by hand:
+Fix on Debian/Ubuntu: add a corrected rule as an override (don't touch the
+vendor file). `install.sh` does this automatically, or run it by hand (on Arch
+the package replaces the vendor rule instead, see above):
 
 ```bash
 sudo cp udev/99-leapmotion-fix.rules /etc/udev/rules.d/
@@ -160,3 +222,7 @@ standard usage boilerplate rather than copyrightable expression.
 
 Found this useful, hit a different bug, or have this working on another
 distro? PRs and issues welcome.
+
+If you touch the Arch packaging, run `scripts/inspect-debs.sh` and check its
+report (`inspect-report.txt`) for missing shared libraries or new maintainer
+script behaviour that the PKGBUILD needs to replicate.

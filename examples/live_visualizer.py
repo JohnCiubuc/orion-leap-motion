@@ -2,7 +2,25 @@
 (actual captured hand shape) side by side with the skeleton overlay
 (palm + finger bones, pinch/grab scores)."""
 
+import os
+import sys
 import threading
+
+# Wayland (Hyprland, Sway, GNOME, KDE...): the pip `opencv-python` wheel bundles
+# a Qt build that has only the X11 "xcb" platform plugin. Left alone, Qt sees
+# WAYLAND_DISPLAY, looks for a wayland plugin, warns, and may fail to open a
+# window. Point it at XWayland explicitly. This must happen before cv2 is
+# imported. Set QT_QPA_PLATFORM yourself to override.
+if os.environ.get("WAYLAND_DISPLAY") and "QT_QPA_PLATFORM" not in os.environ:
+    if os.environ.get("DISPLAY"):
+        os.environ["QT_QPA_PLATFORM"] = "xcb"
+    else:
+        sys.exit(
+            "Wayland session without XWayland (DISPLAY is unset). OpenCV's "
+            "window needs XWayland; enable it in your compositor (Hyprland: "
+            "`xwayland { enabled = true }`, the default)."
+        )
+
 import cv2
 import numpy as np
 import leap
