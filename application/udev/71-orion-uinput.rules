@@ -1,0 +1,9 @@
+# Orion Renewal udev rules. Installed to /etc/udev/rules.d/ by application/setup.sh.
+
+# Virtual input: lets the logged-in desktop user create Orion's virtual mouse/keyboard without root.
+KERNEL=="uinput", SUBSYSTEM=="misc", OPTIONS+="static_node=uinput", TAG+="uaccess"
+
+# Keep Leap controllers awake: disable USB autosuspend (a common reason the device "falls asleep").
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="f182", ATTR{idProduct}=="0003", ATTR{power/control}="on"
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="2936", ATTR{idProduct}=="1206", ATTR{power/control}="on"
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="2936", ATTR{idProduct}=="1202", ATTR{power/control}="on"

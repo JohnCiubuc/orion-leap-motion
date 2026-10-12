@@ -1,0 +1,4 @@
+web/node_modules/
+orion/web/
+*.egg-info/
+.pytest_cache/

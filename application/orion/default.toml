@@ -1,0 +1,163 @@
+# Orion Renewal configuration — edit by hand or in the app (changes apply live).
+# Location: ~/.config/orion-renewal/config.toml
+
+[general]
+source = "leap"          # leap | demo
+engage_required = false  # require the "engage" gesture (open palm toward screen) before each gesture
+engage_window = 2.0      # seconds a gesture may follow "engage"
+ir_fps = 30              # raw IR stream rate in the dashboard
+port = 0                 # local UI port (0 = random free port)
+auto_wake = 10           # restart the controller after this many seconds without frames (0 = off)
+
+# Per-gesture tuning: [gestures.<name>] enabled = false / <param> = value
+[gestures.swipe]
+distance = 110
+
+[gestures.pointer]
+track = "palm"           # what steers the air mouse: palm | knuckles | index | middle | pinch
+
+# Profiles activate when the focused window's class matches `match` (regex).
+# Bindings with profile = "<name>" override "default" bindings for the same gesture.
+[profiles.zen]
+match = "(?i)^zen"
+
+[profiles.spotify]
+match = "(?i)spotify"
+
+# Modes are groups of bindings toggled at runtime (tray, or the orion.mode action).
+# exclusive = only that mode's bindings (and orion.* actions) fire while it is on.
+[modes.air_mouse]
+exclusive = true
+
+# ── Default profile ──────────────────────────────────────────────────────────
+[[bindings]]
+gesture = "swipe.left"
+action = "hypr.dispatch"
+args = { cmd = "workspace e-1" }
+
+[[bindings]]
+gesture = "swipe.right"
+action = "hypr.dispatch"
+args = { cmd = "workspace e+1" }
+
+[[bindings]]
+gesture = "thumbs_up"
+action = "media"
+args = { op = "PlayPause" }
+
+[[bindings]]
+gesture = "thumbs_down"
+action = "audio.mute"
+
+[[bindings]]
+gesture = "rotate"
+action = "audio.dial"
+
+[[bindings]]
+gesture = "palm_flip.up"
+action = "hypr.dispatch"
+args = { cmd = "togglespecialworkspace" }
+
+[[bindings]]
+gesture = "path.circle"
+action = "media"
+args = { op = "Next" }
+
+[[bindings]]
+gesture = "path.z"
+action = "media"
+args = { op = "Previous" }
+
+[[bindings]]
+gesture = "path.square"
+action = "hypr.dispatch"
+args = { cmd = "fullscreen 1" }
+
+# Pinch and lift / push away to scroll up, lower / pull in to scroll down: one notch per 20 mm moved.
+[[bindings]]
+gesture = "pinch_joy.up"
+action = "input.scroll"
+args = { amount = 1 }
+
+[[bindings]]
+gesture = "pinch_joy.down"
+action = "input.scroll"
+args = { amount = -1 }
+
+# Same with a fist for volume: 2 % per step.
+[[bindings]]
+gesture = "grab_joy.up"
+action = "audio.volume"
+args = { step = 2 }
+
+[[bindings]]
+gesture = "grab_joy.down"
+action = "audio.volume"
+args = { step = -2 }
+
+[[bindings]]
+gesture = "ok"
+action = "orion.mode"
+args = { mode = "air_mouse", state = "on" }
+
+# ── Zen browser ──────────────────────────────────────────────────────────────
+[[bindings]]
+gesture = "swipe.left"
+action = "browser"
+args = { op = "prev_tab" }
+profile = "zen"
+
+[[bindings]]
+gesture = "swipe.right"
+action = "browser"
+args = { op = "next_tab" }
+profile = "zen"
+
+[[bindings]]
+gesture = "palm_flip.down"
+action = "browser"
+args = { op = "back" }
+profile = "zen"
+
+[[bindings]]
+gesture = "zoom"
+action = "browser.zoom"
+profile = "zen"
+
+# ── Spotify ──────────────────────────────────────────────────────────────────
+[[bindings]]
+gesture = "swipe.left"
+action = "media"
+args = { op = "Previous", player = "spotify" }
+profile = "spotify"
+
+[[bindings]]
+gesture = "swipe.right"
+action = "media"
+args = { op = "Next", player = "spotify" }
+profile = "spotify"
+
+# ── Air mouse mode ───────────────────────────────────────────────────────────
+[[bindings]]
+gesture = "pointer"
+action = "input.pointer"
+args = { gain = 4.0 }
+mode = "air_mouse"
+
+[[bindings]]
+gesture = "pinch"
+action = "input.button"
+args = { button = "left" }
+mode = "air_mouse"
+
+[[bindings]]
+gesture = "peace"
+action = "input.click"
+args = { button = "right" }
+mode = "air_mouse"
+
+[[bindings]]
+gesture = "fist"
+action = "orion.mode"
+args = { mode = "air_mouse", state = "off" }
+mode = "air_mouse"

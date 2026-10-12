@@ -1,0 +1,333 @@
+
+===== System =====
+7.2.9-zen1-1-zen
+NAME="Arch Linux"
+BUILD_ID=rolling
+XDG_SESSION_TYPE=wayland WAYLAND_DISPLAY=wayland-1 DISPLAY=:0
+HYPRLAND_INSTANCE_SIGNATURE=set
+Python 3.14.8
+
+===== sha256 (paste into PKGBUILD sha256sums) =====
+3e58b410d12dcc1406bdfa369c87f4f5beb65edde0ccc2ff4185ccc2dac3fbb6  ./ultraleap-hand-tracking-control-panel_1125862.deb
+9d9162e4d133acf7f430c0e8127cc33c82da2cbb700f1ee04edeff5fab98e0e4  ./ultraleap-hand-tracking-service_5.17.1.0-a9f25232-1.0_amd64.deb
+
+===== service: control =====
+Architecture: amd64
+Depends: libatomic1 (>=4.8),libc6 (>=2.29),libgcc-s1 (>=3.0),libstdc++6 (>=9),libudev1 (>=183),psmisc (>=23.3-1),libusb-1.0-0 (>=1.0.23)
+Description: Installs and runs Ultraleap Hand Tracking
+ Installs the Ultraleap Hand Tracking service and SDK for development.
+Maintainer: Ultraleap <info@ultraleap.com>
+Package: ultraleap-hand-tracking-service
+Priority: optional
+Section: devel
+Version: 5.17.1.0
+Installed-Size: 749434
+
+
+===== service: conffiles =====
+/etc/ultraleap/hand_tracker_config.json
+
+===== service: preinst =====
+#!/bin/bash
+# preinst script for leapd
+
+set -e
+
+# Create a non-root user with the right privileges.
+addgroup leap || true
+adduser --system --ingroup leap --no-create-home --home /nonexistent leap || true
+usermod -a -G plugdev leap # Access to USB devices
+
+# Permit `leap` to write logs
+LOG_DIR=/var/log/ultraleap/
+mkdir -p $LOG_DIR
+chown -R leap:leap $LOG_DIR
+
+# Permit `leap` to read/write config files
+CONFIG_DIR=/etc/ultraleap/
+mkdir -p $CONFIG_DIR
+chown -R leap:leap $CONFIG_DIR
+
+# Permit `leap` to read ldat files
+LDAT_DIR=/usr/share/ultraleap/
+mkdir -p $LDAT_DIR
+chown -R leap:leap $LDAT_DIR
+
+===== service: postinst =====
+#!/bin/bash
+# postinst script for leapd
+#
+# see: dh_installdeb(1)
+ 
+set -e
+ 
+# summary of how this script can be called:
+#        * <postinst> `configure' <most-recently-configured-version>
+#        * <old-postinst> `abort-upgrade' <new version>
+#        * <conflictor's-postinst> `abort-remove' `in-favour' <package>
+#          <new-version>
+#        * <postinst> `abort-remove'
+#        * <deconfigured's-postinst> `abort-deconfigure' `in-favour'
+#          <failed-install-package> <version> `removing'
+#          <conflicting-package> <version>
+# for details, see http://www.debian.org/doc/debian-policy/ or
+# the debian-policy package
+
+# Source debconf library.
+. /usr/share/debconf/confmodule
+ 
+case "$1" in
+    configure)
+        # Work around the fact our config may have disappeared despite dpkg
+        # marking the package as configured and removed, by providing a
+        # suitable configuration file if one does not exist.
+        if [ ! -e /etc/ultraleap/hand_tracker_config.json ]; then
+          cp /usr/TrackingService/bin/hand_tracker_config.json /etc/ultraleap/hand_tracker_config.json
+          chown leap:leap /etc/ultraleap/hand_tracker_config.json
+        fi
+
+        # Cleanup temporary install directory
+        rm -rf /usr/TrackingService/
+
+        # We made a release where we changed the permissions of this file so everyone could access,
+        # we want to change this back, so if the file exists we change it to leap user
+        if [ -e /etc/ultraleap/analytics_config.json ]; then
+          chown leap:leap /etc/ultraleap/analytics_config.json
+          chmod 644 /etc/ultraleap/analytics_config.json
+        fi
+
+        if [ -f "$(which udevadm)" ]; then
+            # Make udev reload its rules to accept the new rule
+            echo -n "Reloading udev rules..."
+            udevadm control --reload && echo "done."
+        else
+            echo "No udevadm detected, skipping reloading udev rules."
+        fi
+
+        # Make sure the `leap` user has access to config files that were installed.
+        CONFIG_DIR=/etc/ultraleap/
+        chown -R leap:leap $CONFIG_DIR
+
+        if [ -f "$(which systemctl)" ]; then
+            if systemctl status > /dev/null; then
+                systemctl daemon-reload
+                systemctl enable ultraleap-hand-tracking-service
+
+                echo -n "Starting leapd as a service... "
+                systemctl start ultraleap-hand-tracking-service && echo "done."
+
+                db_get ultraleap-hand-tracking-service/accept_licenses
+                if [ "$RET" = "true" ]; then
+                    if [ -f "$(which leapctl)" ]; then
+                        # wait for the server to be fully setup before trying to use leapctl
+                        sleep 5s
+
+                        leapctl eula -y
+                    fi
+                fi
+            else
+                echo "Systemctl is not running, skipping leapd service setup."
+            fi
+        else
+            echo "No systemctl detected, skipping leapd service setup."
+        fi
+
+    # Make sure everyone can read and write this file specifically
+    chmod a+rw $CONFIG_DIR/hand_tracker_config.json
+
+    # Links for SDK standard locations
+    mkdir -p /usr/lib/x86_64-linux-gnu/ /usr/include/
+    for f in libLeapC.so libLeapC.so.5
+    do
+      ln -s /usr/lib/ultraleap-hand-tracking-service/$f /usr/lib/x86_64-linux-gnu/$f || true
+    done
+    ;;
+ 
+    abort-upgrade|abort-remove|abort-deconfigure)
+    ;;
+ 
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+    ;;
+esac
+ 
+ldconfig
+db_stop
+ 
+exit 0
+
+===== service: prerm =====
+#!/bin/bash
+
+set -e
+
+if [ -f "$(which systemctl)" ]; then
+    if systemctl status > /dev/null; then
+        systemctl stop ultraleap-hand-tracking-service || true
+        systemctl disable ultraleap-hand-tracking-service || true
+    fi
+fi
+
+# Remove SDK standard location links
+for f in libLeapC.so libLeapC.so.5
+do
+  rm -f /usr/lib/x86_64-linux-gnu/$f
+done
+
+rm -f /usr/include/LeapC.h
+
+# kill all command shouldn't be necessary but there's no harm in calling it
+# Give the daemon a second to shut down gracefully
+(killall -q -INT leapd && sleep 1) || true
+
+===== service: postrm =====
+#!/bin/bash
+
+set -e
+
+if [ "$1" = "purge" -a -e /usr/share/debconf/confmodule ]; then
+    # Source debconf library.
+    . /usr/share/debconf/confmodule
+    # Remove our changes to the db.
+    db_purge
+fi
+===== service: file tree (dirs, depth 4) =====
+.
+./etc
+./etc/ultraleap
+./usr
+./usr/bin
+./usr/include
+./usr/lib
+./usr/lib/systemd
+./usr/lib/systemd/system
+./usr/lib/udev
+./usr/lib/udev/rules.d
+./usr/lib/ultraleap-hand-tracking-service
+./usr/lib/ultraleap-hand-tracking-service/cmake
+./usr/lib/ultraleap-hand-tracking-service/leapc_cffi
+./usr/lib/x86_64-linux-gnu
+./usr/lib/x86_64-linux-gnu/cmake
+./usr/share
+./usr/share/doc
+./usr/share/doc/ultraleap-hand-tracking-service
+./usr/share/ultraleap
+./usr/share/ultraleap/firmware
+./usr/TrackingService
+./usr/TrackingService/bin
+
+===== service: units / udev / sysusers / tmpfiles / desktop / ld.so =====
+./usr/lib/systemd/system/ultraleap-hand-tracking-service.service
+    [Unit]
+    Description=Ultraleap Tracking Service
+    After=network.target
+    
+    [Service]
+    User=leap
+    Type=exec
+    Environment="LIBTRACK_IS_SERVICE=1"
+    ExecStart="/usr/bin/leapd"
+    KillMode=process
+    KillSignal=SIGINT
+    Restart=on-failure
+    StandardOutput=journal
+    
+    [Install]
+    WantedBy=multi-user.target
+    
+./usr/lib/udev/rules.d/99-LMC.rules
+    SUBSYSTEM=="usb", ATTRS{idVendor}=="f182", ATTRS{idProduct}=="0003"
+    
+    GROUP="plugdev"
+./usr/lib/udev/rules.d/99-LMC2.rules
+    SUBSYSTEM=="usb", ATTRS{idVendor}=="2936", ATTRS{idProduct}=="1206"
+    
+    GROUP="plugdev"
+./usr/lib/udev/rules.d/99-SIR170.rules
+    SUBSYSTEM=="usb", ATTRS{idVendor}=="2936", ATTRS{idProduct}=="1202"
+    
+    GROUP="plugdev"
+
+===== service: missing shared libraries =====
+
+===== service: leapd dynamic section =====
+ 0x0000000000000001 (NEEDED)             Shared library: [libpthread.so.0]
+ 0x0000000000000001 (NEEDED)             Shared library: [liblibrealuvc.so.0]
+ 0x0000000000000001 (NEEDED)             Shared library: [libresolv.so.2]
+ 0x0000000000000001 (NEEDED)             Shared library: [libdl.so.2]
+ 0x0000000000000001 (NEEDED)             Shared library: [libatomic.so.1]
+ 0x0000000000000001 (NEEDED)             Shared library: [libstdc++.so.6]
+ 0x0000000000000001 (NEEDED)             Shared library: [libm.so.6]
+ 0x0000000000000001 (NEEDED)             Shared library: [libgcc_s.so.1]
+ 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]
+ 0x0000000000000001 (NEEDED)             Shared library: [ld-linux-x86-64.so.2]
+ 0x000000000000001d (RUNPATH)            Library runpath: [$ORIGIN:/usr/lib/ultraleap-hand-tracking-service]
+
+===== service: where bundled libraries live =====
+./usr/lib/ultraleap-hand-tracking-service/leapc_cffi/libLeapC.so
+./usr/lib/ultraleap-hand-tracking-service/leapc_cffi/libLeapC.so.5
+./usr/lib/ultraleap-hand-tracking-service/libLeapC.so
+./usr/lib/ultraleap-hand-tracking-service/libLeapC.so.5
+./usr/lib/ultraleap-hand-tracking-service/liblibrealuvc.so
+./usr/lib/ultraleap-hand-tracking-service/liblibrealuvc.so.0
+./usr/lib/ultraleap-hand-tracking-service/liblibrealuvc.so.0.1.1
+total 23012
+-rwxr-xr-x 1 inathero inathero  1647528 Nov 16  2023 leapctl
+-rwxr-xr-x 1 inathero inathero 21910928 Nov 16  2023 leapd
+
+===== control-panel: control =====
+Package: ultraleap-hand-tracking-control-panel
+Version: 3.4.1
+Architecture: amd64
+Maintainer: Ultraleap <info@ultraleap.com>
+Installed-Size: 95000
+Depends: libc6 (>= 2.17), libgcc-s1 (>= 4.2), zlib1g (>= 1:1.1.4), ultraleap-hand-tracking-service
+Enhances: ultraleap-hand-tracking-service
+Section: utils
+Priority: optional
+Homepage: https://ultraleap.com
+Description: Tool to manage Ultraleap hand tracking service.
+ A visualisation and settings management tool for the
+ Ultraleap Tracking Service.
+ Provides functionality to visualise data feeds from
+ multiple devices, as well as manage device specific
+ and global service configurations.
+
+===== control-panel: conffiles =====
+(none)
+
+===== control-panel: file tree (dirs, depth 4) =====
+.
+./opt
+./opt/ultraleap-hand-tracking-control-panel
+./opt/ultraleap-hand-tracking-control-panel/ultraleap-hand-tracking-control-panel_Data
+./opt/ultraleap-hand-tracking-control-panel/ultraleap-hand-tracking-control-panel_Data/Managed
+./opt/ultraleap-hand-tracking-control-panel/ultraleap-hand-tracking-control-panel_Data/MonoBleedingEdge
+./opt/ultraleap-hand-tracking-control-panel/ultraleap-hand-tracking-control-panel_Data/Resources
+./opt/ultraleap-hand-tracking-control-panel/ultraleap-hand-tracking-control-panel_Data/StreamingAssets
+./usr
+./usr/bin
+./usr/share
+./usr/share/applications
+./usr/share/doc
+./usr/share/doc/ultraleap-hand-tracking-control-panel
+./usr/share/gnome-shell
+./usr/share/gnome-shell/extensions
+./usr/share/icons
+./usr/share/icons/hicolor
+
+===== control-panel: units / udev / sysusers / tmpfiles / desktop / ld.so =====
+./usr/share/applications/ultraleap-hand-tracking-control-panel.desktop
+    [Desktop Entry]
+    Name=Ultraleap Control Panel
+    Comment=A visualisation and settings management tool for the Ultraleap Tracking Service.
+    Keywords=Ultraleap;Hands;Hand;Tracking;Tracker
+    Version=1.0
+    Type=Application
+    Categories=Settings
+    Terminal=false
+    Exec="/opt/ultraleap-hand-tracking-control-panel/ultraleap-hand-tracking-control-panel"
+    Icon=ultraleap_hand_tracking_control_panel
+
+===== control-panel: missing shared libraries =====

@@ -1,0 +1,63 @@
+/* ── Tokens ─────────────────────────────────────────────────────────────── */
+:root {
+  --void: #0a0e1f;      /* night sky — page */
+  --nebula: #121833;    /* panels */
+  --nebula-2: #1a2246;  /* raised / hover */
+  --line: #253060;      /* hairlines */
+  --star: #e6ecff;      /* text */
+  --dust: #8a93b8;      /* secondary text */
+  --rigel: #8fc7ff;     /* left hand, primary accent */
+  --betelgeuse: #ffa463;/* right hand */
+  --ok: #7ee2b8;
+  --warn: #ffcf70;
+  --bad: #ff7a8a;
+
+  --display: "Sora", sans-serif;
+  --ui: "IBM Plex Sans", sans-serif;
+  --id: "IBM Plex Mono", monospace; /* only for config identifiers (swipe.left, hypr.dispatch) */
+
+  --r-sm: 6px;
+  --r-lg: 14px;
+  color-scheme: dark;
+}
+
+/* ── Base ───────────────────────────────────────────────────────────────── */
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--void); color: var(--star); }
+body { font: 14px/1.5 var(--ui); -webkit-font-smoothing: antialiased; overflow: hidden; }
+h1, h2, h3 { font-family: var(--display); font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+h1 { font-size: 26px; }
+h2 { font-size: 17px; }
+h3 { font-size: 14px; }
+p { margin: 0; }
+code, .id { font-family: var(--id); font-size: 12.5px; }
+.muted { color: var(--dust); }
+:focus-visible { outline: 2px solid var(--rigel); outline-offset: 2px; border-radius: var(--r-sm); }
+::selection { background: #8fc7ff44; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--line); border-radius: 10px; border: 3px solid var(--void); }
+
+/* ── Controls ───────────────────────────────────────────────────────────── */
+button, input, select { font: inherit; color: inherit; }
+button {
+  display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+  padding: 6px 12px; border-radius: var(--r-sm); border: 1px solid var(--line);
+  background: var(--nebula-2); transition: border-color .15s, background .15s;
+}
+button:hover { border-color: var(--rigel); }
+button.primary { background: var(--rigel); color: var(--void); border-color: transparent; font-weight: 600; }
+button.ghost { background: none; border-color: transparent; color: var(--dust); }
+button.ghost:hover { color: var(--star); }
+button.danger:hover { border-color: var(--bad); color: var(--bad); }
+input[type="text"], input[type="number"], select {
+  background: var(--void); border: 1px solid var(--line); border-radius: var(--r-sm);
+  padding: 6px 9px; min-width: 0;
+}
+input:focus, select:focus { border-color: var(--rigel); outline: none; }
+input[type="range"] { accent-color: var(--rigel); width: 100%; }
+
+.panel { background: var(--nebula); border: 1px solid var(--line); border-radius: var(--r-lg); }
+.left { --hand: var(--rigel); }
+.right { --hand: var(--betelgeuse); }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
