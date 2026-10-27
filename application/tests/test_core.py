@@ -886,3 +886,6 @@ def test_pointer_replay_metrics_on_a_synthetic_recording():
     assert m["rest_jitter_px"] < 1
     assert m["reached_edges"]["left"] is True
     assert 0 < m["max_jump_px"] < float("inf")
+    gap = [Frame(t=2.6 + i / 100, hands=()) for i in range(30)]
+    far = [Frame(t=2.9 + i / 100, hands=(make_hand(palm=(100, 250, 0)),)) for i in range(5)]
+    assert tool.metrics(rest + sweep + gap + far)["max_jump_px"] == pytest.approx(m["max_jump_px"])  # hand-loss gap is not a jump

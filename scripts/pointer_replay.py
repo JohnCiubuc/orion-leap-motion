@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Replay a recording through the desktop pointer and print jitter/jump/edge metrics as JSON.
+Pixel metrics assume a 3840x2160 screen.
 Usage: pointer_replay.py FILE.orec [key=value ...]   (key=value overrides gesture settings)"""
 import gzip
 import json
@@ -30,10 +31,12 @@ def metrics(frames, overrides=None):
         prev = (f.t, palm) if palm is not None else None
     uv = np.array(pts).reshape(-1, 2)
     step = np.linalg.norm(np.diff(uv, axis=0) * SCREEN, axis=1)
-    rest = step[np.array(speeds[1:]) < REST_SPEED] if len(step) else step
+    sp = np.array(speeds[1:])  # speeds[k+1] belongs to step k (the move into point k+1)
+    rest = step[sp < REST_SPEED] if len(step) else step
+    jumps = step[np.isfinite(sp)] if len(step) else step  # inf = hand just (re)appeared: a gap, not a jump
     return {
         "rest_jitter_px": float(np.sqrt(np.mean(rest ** 2))) if len(rest) else 0.0,
-        "max_jump_px": float(step.max()) if len(step) else 0.0,
+        "max_jump_px": float(jumps.max()) if len(jumps) else 0.0,
         "reached_edges": {n: bool(len(uv) and (uv[:, i].min() <= EDGE_EPS if n in ("left", "top") else uv[:, i].max() >= 1 - EDGE_EPS))
                           for n, i in (("left", 0), ("right", 0), ("top", 1), ("bottom", 1))},
     }
