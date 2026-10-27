@@ -3,8 +3,10 @@
 Runs as its own process under the *system* Python (needs python-gobject + gtk4-layer-shell
 from pacman, not the venv), started by orion/overlay.py with LD_PRELOAD set for the
 layer-shell library. Reads JSON lines on stdin:
-    {"type": "config", "opacity": .85, "seconds": 1.6, "corner": "top-right", "margin": 16}
+    {"type": "config", "opacity": .85, "seconds": 1.6, "corner": "top-right", "margin": 16,
+     "precision_ring": true}
     {"type": "show", "title": "Swipe left", "detail": "hypr.dispatch", "hand": "right", "key": "…"}
+    {"type": "ring", "on": true}     # precision ring around the cursor (needs config precision_ring)
 
 It is a wlr-layer-shell surface, not a window: Hyprland never tiles, focuses or lists it,
 it takes no keyboard focus and clicks pass straight through it.
@@ -14,9 +16,12 @@ import json
 import os
 import socket
 import sys
+import time
 
 import gi
 
+# Probe at 4K: full-monitor ring costs ~55% CPU on vulkan, ~30% gl, ~12% cairo (damage-clipped to the ring).
+os.environ.setdefault("GSK_RENDERER", "cairo")
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 gi.require_version("Gtk4LayerShell", "1.0")
@@ -38,18 +43,41 @@ EDGES = {"top-right": ("TOP", "RIGHT"), "top-left": ("TOP", "LEFT"),
 
 # ── Focused monitor (Hyprland IPC; elsewhere the compositor picks) ───────────
 
-def focused_connector():
+def _ipc(cmd):
     sig = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")
     if not sig:
         return None
     try:
         with socket.socket(socket.AF_UNIX) as s:
+            s.settimeout(0.2)  # a wedged compositor must not stall the GTK loop
             s.connect(f"{os.environ.get('XDG_RUNTIME_DIR', '/tmp')}/hypr/{sig}/.socket.sock")
-            s.sendall(b"j/monitors")
+            s.sendall(cmd)
             data = b"".join(iter(lambda: s.recv(65536), b""))
-        return next((m["name"] for m in json.loads(data) if m.get("focused")), None)
+        return json.loads(data)
     except Exception:
         return None
+
+
+def focused_monitor():
+    return next((m for m in _ipc(b"j/monitors") or [] if m.get("focused")), None)
+
+
+def focused_connector():
+    m = focused_monitor()
+    return m and m.get("name")
+
+
+def cursor_position():
+    """Global layout coordinates of the pointer, or None (never raises)."""
+    try:
+        c = _ipc(b"j/cursorpos")
+        return float(c["x"]), float(c["y"])
+    except Exception:
+        return None
+
+
+def ease_out_cubic(t):
+    return 1 - (1 - min(max(t, 0.0), 1.0)) ** 3
 
 
 def gdk_monitor(connector):
@@ -72,6 +100,7 @@ class Overlay:
         LS.set_layer(self.win, LS.Layer.OVERLAY)
         LS.set_keyboard_mode(self.win, LS.KeyboardMode.NONE)  # never steals focus
         self.win.connect("map", self._click_through)
+        self._init_ring(app)
 
         self.bar, self.title, self.detail = Gtk.Box(), Gtk.Label(xalign=0), Gtk.Label(xalign=0)
         self.title.add_css_class("title")
@@ -94,12 +123,13 @@ class Overlay:
         self.hide_id = self.fade_id = None
         self.last_key, self.count = None, 0
 
-    def _click_through(self, *_):
+    def _click_through(self, win, *_):
         try:
             import cairo
-            self.win.get_surface().set_input_region(cairo.Region())  # empty input region: clicks pass through
+            win.get_surface().set_input_region(cairo.Region())  # empty input region: clicks pass through
+            return True
         except Exception:
-            pass
+            return False
 
     def apply_config(self):
         for edge in LS.Edge.TOP, LS.Edge.BOTTOM, LS.Edge.LEFT, LS.Edge.RIGHT:
@@ -114,8 +144,11 @@ class Overlay:
         if msg.get("type") == "config":
             self.cfg.update({k: v for k, v in msg.items() if k != "type"})
             self.apply_config()
+            self.set_ring(self.ring_want)  # precision_ring may have flipped
         elif msg.get("type") == "show":
             self.show(msg)
+        elif msg.get("type") == "ring":
+            self.set_ring(bool(msg.get("on")))
 
     def show(self, msg):
         key = msg.get("key")
@@ -156,6 +189,107 @@ class Overlay:
             return True
         self.fade_id = GLib.timeout_add(16, step)
         return False
+
+    # ── Precision ring ────────────────────────────────────────────────────────
+    # A full-monitor transparent surface with an empty input region, redrawn on a 16 ms timer
+    # only while the ring is visible; the probe showed this is cheap (nothing is damaged but the
+    # ring) and avoids the lag of moving a small surface via margins.
+
+    def _init_ring(self, app):
+        self.ring_win = Gtk.Window(application=app, decorated=False)  # resizable: anchors stretch it over the monitor
+        LS.init_for_window(self.ring_win)
+        LS.set_namespace(self.ring_win, "orion-ring")
+        LS.set_layer(self.ring_win, LS.Layer.OVERLAY)
+        LS.set_keyboard_mode(self.ring_win, LS.KeyboardMode.NONE)
+        LS.set_exclusive_zone(self.ring_win, -1)  # ignore other bars' reserved space
+        for edge in LS.Edge.TOP, LS.Edge.BOTTOM, LS.Edge.LEFT, LS.Edge.RIGHT:
+            LS.set_anchor(self.ring_win, edge, True)
+        self.ring_win.connect("map", self._ring_map)
+        area = Gtk.DrawingArea()
+        area.set_draw_func(self._draw_ring)
+        self.ring_win.set_child(area)
+        self.ring_area = area
+        self.ring_target = False  # effective state after setting + safety checks
+        self.ring_want = False  # what the engine asked for
+        self.ring_broken = False  # input region failed: never show a surface that could eat clicks
+        self.ring_r, self.ring_a = 44.0, 0.0
+        self.ring_anim = None  # (t0, ms, r0, r1, a0, a1)
+        self.ring_xy = (0.0, 0.0)  # cursor in monitor-local coordinates
+        self.ring_mon = None  # (name, x, y) of the monitor the surface sits on
+        self.ring_tick_id, self.ring_last_check = None, 0.0
+
+    def _ring_map(self, win):
+        if not self._click_through(win):
+            self.ring_broken = True
+            win.set_visible(False)
+
+    def set_ring(self, on):
+        self.ring_want = on
+        on = on and bool(self.cfg.get("precision_ring", True)) and not self.ring_broken
+        if on == self.ring_target:
+            return  # repeated on must not restart the zoom
+        self.ring_target = on
+        visible = self.ring_win.get_visible()
+        if not on and not visible:
+            return
+        if on and not visible:
+            self.ring_r, self.ring_a = 44.0, 0.0
+            self._place_ring()
+            self.ring_win.set_visible(True)
+        r1, a1, ms = (20.0, 1.0, 160) if on else (44.0, 0.0, 120)
+        self.ring_anim = (time.monotonic(), ms, self.ring_r, r1, self.ring_a, a1)
+        if not self.ring_tick_id:
+            self.ring_tick_id = GLib.timeout_add(16, self._ring_tick)
+
+    def _place_ring(self):
+        m = focused_monitor()
+        if not m:  # IPC down: let the compositor pick, cursor stays where it was
+            return
+        self.ring_mon = (m["name"], m["x"], m["y"])
+        LS.set_monitor(self.ring_win, gdk_monitor(m["name"]))
+
+    def _ring_tick(self):
+        now = time.monotonic()
+        if now - self.ring_last_check > 0.25:  # cursor may have crossed to another monitor
+            self.ring_last_check = now
+            m = focused_monitor()
+            if m and self.ring_mon and m["name"] != self.ring_mon[0] and self.ring_win.get_visible():
+                self.ring_win.set_visible(False)  # remap: the layer-shell monitor is fixed at map time
+                self._place_ring()
+                self.ring_win.set_visible(True)
+        pos = cursor_position()
+        dirty = False
+        if pos and self.ring_mon:
+            xy = (pos[0] - self.ring_mon[1], pos[1] - self.ring_mon[2])
+            dirty, self.ring_xy = xy != self.ring_xy, xy
+        if self.ring_anim:
+            t0, ms, r0, r1, a0, a1 = self.ring_anim
+            t = (now - t0) * 1000 / ms
+            e = ease_out_cubic(t)
+            self.ring_r, self.ring_a = r0 + (r1 - r0) * e, a0 + (a1 - a0) * e
+            dirty = True
+            if t >= 1:
+                self.ring_anim = None
+                if a1 == 0.0:  # faded out: unmapped, nothing on screen, nothing to hit
+                    self.ring_win.set_visible(False)
+                    self.ring_tick_id = None
+                    return False
+        if dirty:
+            self.ring_area.queue_draw()
+        return True
+
+    def _draw_ring(self, area, cr, w, h):
+        a = self.ring_a * float(self.cfg["opacity"])
+        if a <= 0:
+            return
+        x, y = self.ring_xy
+        cr.arc(x, y, self.ring_r, 0, 6.2832)
+        cr.set_line_width(4)
+        cr.set_source_rgba(0.05, 0.07, 0.16, a * 0.5)  # dark halo keeps it visible on light backgrounds
+        cr.stroke_preserve()
+        cr.set_line_width(2)
+        cr.set_source_rgba(0.56, 0.78, 1.0, a)
+        cr.stroke()
 
 
 # ── Entry: stdin JSON lines → overlay (exits when Orion closes the pipe) ─────
