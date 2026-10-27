@@ -214,7 +214,7 @@ class Overlay:
         self.ring_broken = False  # input region failed: never show a surface that could eat clicks
         self.ring_r, self.ring_a = 44.0, 0.0
         self.ring_anim = None  # (t0, ms, r0, r1, a0, a1)
-        self.ring_xy = (0.0, 0.0)  # cursor in monitor-local coordinates
+        self.ring_xy = None  # cursor in monitor-local coordinates
         self.ring_mon = None  # (name, x, y) of the monitor the surface sits on
         self.ring_tick_id, self.ring_last_check = None, 0.0
 
@@ -233,20 +233,23 @@ class Overlay:
         if not on and not visible:
             return
         if on and not visible:
-            self.ring_r, self.ring_a = 44.0, 0.0
-            self._place_ring()
+            if not self._place_ring():  # no Hyprland / IPC down: no cursor to follow, so no ring
+                self.ring_target = False
+                return
+            self.ring_r, self.ring_a, self.ring_xy = 44.0, 0.0, None  # drawn only once a real position arrives
             self.ring_win.set_visible(True)
         r1, a1, ms = (20.0, 1.0, 160) if on else (44.0, 0.0, 120)
         self.ring_anim = (time.monotonic(), ms, self.ring_r, r1, self.ring_a, a1)
         if not self.ring_tick_id:
-            self.ring_tick_id = GLib.timeout_add(16, self._ring_tick)
+            self.ring_tick_id = GLib.timeout_add(17, self._ring_tick)  # <= 60 Hz
 
     def _place_ring(self):
         m = focused_monitor()
-        if not m:  # IPC down: let the compositor pick, cursor stays where it was
-            return
+        if not m:
+            return False
         self.ring_mon = (m["name"], m["x"], m["y"])
         LS.set_monitor(self.ring_win, gdk_monitor(m["name"]))
+        return True
 
     def _ring_tick(self):
         now = time.monotonic()
@@ -280,7 +283,7 @@ class Overlay:
 
     def _draw_ring(self, area, cr, w, h):
         a = self.ring_a * float(self.cfg["opacity"])
-        if a <= 0:
+        if a <= 0 or not self.ring_xy:
             return
         x, y = self.ring_xy
         cr.arc(x, y, self.ring_r, 0, 6.2832)
