@@ -39,14 +39,13 @@ view_top = 351
 bottom = 150
 responsive = 0.16
 precision = 0.2          # cursor travel per mm of hand movement once the hand settles (1 = off)
-dwell = 0.10             # s the hand must stay slow before precision starts
+dwell = 0.09             # s the hand must stay slow before precision starts
 enter_speed = 40         # mm/s: slower than this starts the dwell
-exit_speed = 150         # mm/s: faster than this leaves precision
-radius = 25              # mm from where precision started at which movement is 1:1 again
-edge = 20                # mm from the view's limits where precision is off, so the edges always reach
-rest = 0.2               # mm of tremor ignored
-glide = 0.12             # s for the cursor to glide back onto the hand after precision
-tap_hold = 0.30          # s the cursor holds after a finger tap
+exit_speed = 82          # mm/s: faster than this leaves precision
+radius = 9               # mm from where precision started at which movement is 1:1 again
+edge = 27                # mm from the view's limits where precision is off, so the edges always reach
+rest = 0.1               # mm of tremor ignored
+glide = 0.0694             # s for the cursor to glide back onto the hand after precision
 
 # Profiles activate when the focused window's class matches `match` (regex).
 # Bindings with profile = "<name>" override "default" bindings for the same gesture.

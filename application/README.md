@@ -140,7 +140,7 @@ Desktop mouse maps the inner `coverage` of the sensor's view onto the whole desk
 limits are the screen edges. Hold the hand still for a moment (`dwell`) and the cursor goes into
 precision: hand movement moves it only `precision` times as far, rising to 1:1 at `radius` mm, so
 small targets are easy to land on. Move faster than `exit_speed` or near the view's limits and it
-glides back onto the hand. A finger tap leaves the cursor where it was. Tune it under Gestures →
+glides back onto the hand. Tune it under Gestures →
 Desktop pointer → Tune.
 
 ## Writing a plugin

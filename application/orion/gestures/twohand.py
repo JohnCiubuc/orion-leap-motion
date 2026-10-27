@@ -120,23 +120,22 @@ class DesktopPointer(Pointer):
     Precision: after `dwell` s slower than `enter_speed` mm/s (and over `edge` mm from the view's limits) the
     cursor stops following the hand 1:1 and moves `precision` times as far, rising to 1:1 at `radius` mm from
     where it locked; tremor under `rest` mm is ignored. Faster than `exit_speed`, or near the limits, it
-    glides back onto the hand over `glide` s, so the limits always reach the screen edges. A finger tap
-    (`tap_trigger`, `tap_still`) undoes the palm's dip and holds the cursor until `tap_hold` s after."""
+    glides back onto the hand over `glide` s, so the limits always reach the screen edges."""
     name, mode = "desktop_pointer", "raw"
     doc = __doc__
-    params = {**{k: v for k, v in Pointer.params.items() if k != "tap_damp"},
+    params = {**{k: v for k, v in Pointer.params.items() if not k.startswith("tap_")},
               "steady": (0.6, 0.1, 5.0), "responsive": (0.16, 0.0, 0.2),
               "view_width": (251, 150, 800), "view_top": (351, 250, 700), "coverage": (0.85, 0.5, 1.0),
-              "bottom": (150, 40, 300), "precision": (0.2, 0.05, 1.0), "dwell": (0.10, 0.0, 1.0),
-              "enter_speed": (40, 5, 200), "exit_speed": (150, 20, 600), "radius": (25, 1, 100),
-              "edge": (20, 0, 100), "rest": (0.2, 0.0, 2.0), "glide": (0.12, 0.01, 1.0), "tap_hold": (0.30, 0.0, 1.0)}
+              "bottom": (150, 40, 300), "precision": (0.2, 0.05, 1.0), "dwell": (0.09, 0.0, 1.0),
+              "enter_speed": (40, 5, 200), "exit_speed": (82, 20, 600), "radius": (9, 1, 100),
+              "edge": (27, 0, 100), "rest": (0.1, 0.0, 2.0), "glide": (0.0694, 0.01, 1.0)}
 
     def __init__(self, overrides=None):
         super().__init__(overrides)
-        self.locks = {}  # hand side → (PrecisionLock, FingerMotion)
+        self.locks = {}  # hand side → PrecisionLock
         self.precise = set()  # hand sides currently in precision
 
-    def _damp(self, h, pos, p, fresh):  # taps are handled by the PrecisionLock instead
+    def _damp(self, h, pos, p, fresh):  # no tap damping here (its params are gone)
         return pos
 
     def update(self, frame):
@@ -152,11 +151,10 @@ class DesktopPointer(Pointer):
         top = max(p["coverage"] * p["view_top"], p["bottom"] + 1)
         lo, hi = np.array([-half, p["bottom"]]), np.array([half, top])
         if fresh:  # a returning hand starts in coarse mode, on the plain mapping
-            self.locks[h.side] = (PrecisionLock(p), FingerMotion())
-        lock, fm = self.locks[h.side]
+            self.locks[h.side] = PrecisionLock(p)
+        lock = self.locks[h.side]
         speed = float(np.linalg.norm(self.filters[h.side].dx))  # filtered palm speed, mm/s
-        tap = fm.update(self.t, np.array([f.tip - h.palm for f in h.fingers]), speed, p["tap_trigger"], p["tap_still"])
-        cursor = lock.step(self.t, np.clip(hand, lo, hi), speed, tap, lo, hi)
+        cursor = lock.step(self.t, np.clip(hand, lo, hi), speed, lo, hi)
         (self.precise.add if lock.precise else self.precise.discard)(h.side)
         return np.clip(((cursor[0] + half) / (2 * half), (top - cursor[1]) / (top - p["bottom"])), 0.0, 1.0)
 

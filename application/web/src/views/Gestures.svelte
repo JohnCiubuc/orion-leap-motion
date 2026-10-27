@@ -47,7 +47,6 @@
     edge: "Distance (mm) from the view's limits where precision is off, so the screen edges always reach.",
     rest: "Hand tremor (mm) ignored while precise.",
     glide: "Time (s) for the cursor to glide back onto the hand after precision.",
-    tap_hold: "How long (s) the cursor holds after a finger tap.",
     tap_trigger: "How far (mm) a fingertip must move against the palm to count as a tap.",
     tap_still: "The palm must be slower than this (mm/s) for a finger move to count as a tap.",
   };
