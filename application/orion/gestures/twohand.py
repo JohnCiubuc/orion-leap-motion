@@ -5,6 +5,7 @@ import math
 import numpy as np
 
 from . import Continuous, continuous, register
+from .fingers import FingerMotion
 
 
 def _pinch_point(h):
@@ -75,29 +76,25 @@ class Pointer(Continuous):
     doc = __doc__
     params = {"track": ("palm", tuple(TRACK)), "steady": (1.0, 0.1, 5.0), "responsive": (0.02, 0.0, 0.2),
               "max_grab": (0.6, 0.1, 1.0), "tap_damp": (0.4, 0.0, 1.5), "tap_trigger": (5, 1, 30), "tap_still": (60, 10, 200)}
-    TAP_HAND_MAX = 250  # mm/s: a hand faster than this is a deliberate sweep; damping stops at once
-    TAP_WINDOW = 0.12  # s: a finger must travel `tap_trigger` mm inside this window (per-frame speed is mostly noise)
     TAP_HOLD = 0.25  # s: stay damped this long after the finger stops (palm rebound)
     TAP_RELEASE = 0.08  # s: catch-up time once damping ends, so the cursor never jumps
 
     def __init__(self, overrides=None):
         super().__init__(overrides)
         self.filters, self.t = {}, 0.0
-        self.damped = {}  # hand side → (cursor-side position, last time, damped until, [(t, fingertips rel. palm, palm speed)])
+        self.damped = {}  # hand side → (cursor-side position, last time, damped until, FingerMotion)
 
     def _damp(self, h, pos, p, fresh):
-        eff, t, until, hist = (pos, self.t, 0.0, []) if fresh else self.damped.get(h.side, (pos, self.t, 0.0, []))
+        fm = FingerMotion() if fresh or h.side not in self.damped else self.damped[h.side][3]
+        eff, t, until = (pos, self.t, 0.0) if fresh else self.damped.get(h.side, (pos, self.t, 0.0))[:3]
         speed = float(np.linalg.norm(self.filters[h.side].dx))  # filtered palm speed, mm/s
-        hist = [e for e in hist if self.t - e[0] <= self.TAP_WINDOW] + [(self.t, np.array([f.tip - h.palm for f in h.fingers]), speed)]
-        _, then, then_speed = hist[0]
-        moved = float(np.max(np.linalg.norm(hist[-1][1] - then, axis=1)))
-        if speed > self.TAP_HAND_MAX:
+        if fm.update(self.t, np.array([f.tip - h.palm for f in h.fingers]), speed, p["tap_trigger"], p["tap_still"]):
+            until = self.t + self.TAP_HOLD  # a finger moved while the palm was resting
+        elif speed > fm.hand_max:
             until = 0.0
-        elif moved > p["tap_trigger"] and then_speed < p["tap_still"]:  # a finger moved while the palm was resting
-            until = self.t + self.TAP_HOLD
         tau = p["tap_damp"] if self.t < until else self.TAP_RELEASE
         eff = pos if tau <= 0 else pos + (eff - pos) * math.exp(-max(self.t - t, 1e-3) / tau)
-        self.damped[h.side] = (eff, self.t, until, hist)
+        self.damped[h.side] = (eff, self.t, until, fm)
         return eff
 
     def update(self, frame):

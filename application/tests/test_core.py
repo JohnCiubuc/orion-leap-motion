@@ -13,6 +13,7 @@ from orion.actions import ACTIONS, Action, load_builtins as load_actions  # noqa
 from orion.config import Config  # noqa: E402
 from orion.frame import Frame, from_dict, pack_skeleton, to_dict  # noqa: E402
 from orion.gestures import REGISTRY, GestureEvent, load_builtins  # noqa: E402
+from orion.gestures.fingers import FingerMotion  # noqa: E402
 from orion.gestures.paths import PathGesture, _resample  # noqa: E402
 from orion.router import Router  # noqa: E402
 from orion.sim import make_hand  # noqa: E402
@@ -674,3 +675,23 @@ def test_tap_damping_never_applies_to_a_moving_hand():
         return out
     sweep = [200 - 4 * i for i in range(60)]  # 460 mm/s: moving hand, finger flex must not damp it
     assert damped(sweep, flex_at=30) == pytest.approx(damped(sweep), rel=0.02)
+
+
+def _tips(dy):  # five fingertips; the index drops by dy mm relative to the palm
+    t = np.zeros((5, 3)); t[1, 1] = -dy; return t
+
+
+def test_finger_motion_flags_a_tap_from_rest():
+    f = FingerMotion()
+    assert not any(f.update(i / 115, _tips(0), 5.0, 5, 60) for i in range(10))
+    assert any(f.update((10 + i) / 115, _tips(i * 1.5), 10.0, 5, 60) for i in range(8))
+
+
+def test_finger_motion_ignores_a_moving_palm():
+    f = FingerMotion()
+    assert not any(f.update(i / 115, _tips(i * 1.5), 200.0, 5, 60) for i in range(20))  # palm 200 mm/s ≥ still
+
+
+def test_finger_motion_ignores_small_noise():
+    f = FingerMotion(); rng = np.random.default_rng(0)
+    assert not any(f.update(i / 115, _tips(rng.normal(0, 0.3)), 3.0, 5, 60) for i in range(200))
