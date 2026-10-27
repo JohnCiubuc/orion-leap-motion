@@ -337,6 +337,67 @@ def test_desktop_pointer_stops_on_a_fist():
     evs = [e for i in range(5) for e in g.update(Frame(t=i / 100, hands=(make_hand(extended=set()),)))]
     assert evs == []
 
+def _dp(**params):  # default geometry, raw filter so the hand position passes through
+    return REGISTRY["desktop_pointer"]({"steady": 5.0, "responsive": 0.2, **params})
+
+
+def _dp_run(g, pts, t0=0.0, ext=FINGERS):  # pts: (x, y) or None (no hand); returns (u, v) per frame with a hand
+    out = []
+    for i, pt in enumerate(pts):
+        hands = () if pt is None else (make_hand(palm=(*pt, 0), extended=ext(i) if callable(ext) else ext),)
+        out += [e.value for e in g.update(Frame(t=t0 + i / 115, hands=hands)) if e.value is not None]
+    return np.array(out)
+
+
+def _dp_map(x, y, g):  # the plain view → desktop mapping
+    p = g.p
+    half, top = p["coverage"] * p["view_width"] / 2, max(p["coverage"] * p["view_top"], p["bottom"] + 1)
+    return np.array([(x + half) / (2 * half), (top - y) / (top - p["bottom"])])
+
+
+def test_desktop_pointer_walk_to_each_limit_hits_the_screen_edge():
+    rest = [(0, 220)] * 30
+    walk = lambda dx, dy: rest + [(dx * 0.19 * i, 220 + dy * 0.19 * i) for i in range(1, 900)]  # noqa: E731  22 mm/s
+    assert _dp_run(_dp(), walk(-1, 0))[-1, 0] == 0.0
+    assert _dp_run(_dp(), walk(1, 0))[-1, 0] == 1.0
+    assert _dp_run(_dp(), walk(0, 1))[-1, 1] == 0.0
+
+
+def test_desktop_pointer_precise_set_tracks_the_mode():
+    g = _dp()
+    _dp_run(g, [(-60, 220)] * 35)  # 0.3 s still
+    assert "right" in g.precise
+    _dp_run(g, [(-60 + 4 * i, 220) for i in range(1, 30)], 1)  # 460 mm/s sweep
+    assert g.precise == set()
+
+
+def test_desktop_pointer_tap_from_rest_keeps_the_cursor():
+    g = _dp()
+    before = _dp_run(g, [(0, 220)] * 58)[-1]  # 0.5 s rest
+    dip = [(0, 220 - 5 * min(i, 8) / 8) for i in range(1, 70)]  # palm dips 5 mm while the index curls
+    after = _dp_run(g, dip, 58 / 115, ext=set(FINGERS) - {"index"})  # no time gap: FingerMotion needs the rest frames
+    assert np.abs(after - before).max() < 1 / g.p["view_width"]
+
+
+def test_desktop_pointer_resets_when_the_hand_returns():
+    g = _dp()
+    _dp_run(g, [(0, 220)] * 30 + [(0.19 * i, 220) for i in range(1, 100)])  # precision, cursor lags the hand
+    _dp_run(g, [None] * 115, 1)  # hand gone for 1 s
+    assert g.precise == set()
+    assert _dp_run(g, [(60, 260)], 2)[0] == pytest.approx(_dp_map(60, 260, g))
+
+
+def test_desktop_pointer_ignores_removed_settings():
+    g = REGISTRY["desktop_pointer"]({"fine": 0.5, "reach": 10, "fine_speed": 5, "tap_damp": 1})
+    assert len(_dp_run(g, [(0.5 * i, 220) for i in range(50)])) == 50
+
+
+def test_desktop_pointer_degenerate_geometry_stays_in_range():
+    g = _dp(view_top=151, bottom=150, coverage=0.5)
+    out = _dp_run(g, [(x, y) for x in (-300, -20, 0, 40, 300) for y in (0, 150, 150.5, 151, 500)] * 3)
+    assert np.isfinite(out).all() and (out >= 0).all() and (out <= 1).all()
+
+
 
 def test_freeze_cursor_holds_the_desktop_pointer_too(router):
     router.modes.add("m")
@@ -617,36 +678,6 @@ def test_pointer_curve_still_then_linear_then_exponential():
     assert pointer_gain(500, 4, 0.15, 0.1) < 4 * 21  # capped
 
 
-def _desktop_run(g, xs, t0=0, y=300):
-    return [e.value[0] for i, x in enumerate(xs)
-            for e in g.update(Frame(t=t0 + i / 115, hands=(make_hand(palm=(x, y, 0)),)))]
-
-
-def _desktop():  # 400 mm wide view, x spans -200…200 mm, raw filter so the hand position passes through
-    return REGISTRY["desktop_pointer"]({"steady": 5.0, "responsive": 0.2, "fine": 0.25, "view_width": 400,
-                                        "coverage": 1.0, "edge": 25, "fine_speed": 60, "reach": 30})
-
-
-def test_desktop_pointer_slow_motion_is_scaled_down():
-    g = _desktop()
-    u0 = _desktop_run(g, [0] * 3)[-1]
-    slow = _desktop_run(g, [0.2 * i for i in range(1, 41)], 1)[-1]  # 8 mm at ~23 mm/s
-    assert 0 < slow - u0 < 0.6 * 8 / 400  # cursor moved well under the hand's 8 mm
-
-
-def test_desktop_pointer_fast_sweep_clears_the_offset_and_edges_always_reach():
-    g = _desktop()
-    _desktop_run(g, [0] * 3)
-    _desktop_run(g, [0.2 * i for i in range(1, 41)], 1)  # build a fine-mode offset
-    _desktop_run(g, [8 + 20 * i for i in range(1, 6)] + [108] * 40, 2)  # fast sweep, then rest
-    assert _desktop_run(g, [108], 3)[-1] == pytest.approx((108 + 200) / 400, abs=0.02)  # 1:1 again
-    g = _desktop()
-    _desktop_run(g, [0] * 3)
-    _desktop_run(g, [0.2 * i for i in range(1, 41)], 1)
-    right = _desktop_run(g, [8 + 0.5 * i for i in range(1, 400)], 2)[-1]  # slow walk all the way to the limit
-    assert right == pytest.approx(1.0, abs=0.001)
-
-
 def test_pointer_damps_palm_wobble_while_a_finger_moves():
     def moved(flex):  # a 6 mm palm dip over 8 frames, with or without the index curling at the same time
         g = REGISTRY["pointer"]({"steady": 5.0, "responsive": 0.2})
@@ -657,12 +688,6 @@ def test_pointer_damps_palm_wobble_while_a_finger_moves():
                        if e.phase == "update")
         return tot
     assert moved(True) < 0.6 * moved(False)
-
-
-def test_desktop_pointer_rest_latch_ignores_tremor():
-    g = REGISTRY["desktop_pointer"]({"steady": 5.0, "responsive": 0.2, "rest": 0.5, "view_width": 400})
-    u0 = _desktop_run(g, [0] * 3)[-1]
-    assert _desktop_run(g, [0.2, -0.2, 0.3, -0.3, 0.2], 1)[-1] == pytest.approx(u0)
 
 
 def test_tap_damping_never_applies_to_a_moving_hand():

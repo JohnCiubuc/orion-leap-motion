@@ -136,6 +136,13 @@ Air mouse steers with whatever `[gestures.pointer] track` names: `palm` (default
 while you tap or pinch), `knuckles`, `index`, `middle` or `pinch`. You can change it under
 Gestures → Pointer → Tune. Out of the box, pinch-and-lift scrolls one notch per 2 cm, and fist-and-lift changes volume.
 
+Desktop mouse maps the inner `coverage` of the sensor's view onto the whole desktop, so the view's
+limits are the screen edges. Hold the hand still for a moment (`dwell`) and the cursor goes into
+precision: hand movement moves it only `precision` times as far, rising to 1:1 at `radius` mm, so
+small targets are easy to land on. Move faster than `exit_speed` or near the view's limits and it
+glides back onto the hand. A finger tap leaves the cursor where it was. Tune it under Gestures →
+Desktop pointer → Tune.
+
 ## Writing a plugin
 
 Drop a file in `~/.config/orion-renewal/plugins/` and restart Orion:

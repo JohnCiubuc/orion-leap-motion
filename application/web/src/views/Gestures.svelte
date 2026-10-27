@@ -39,6 +39,17 @@
     steady: "Smoothing when still: lower = steadier but slower to start.",
     responsive: "How quickly smoothing drops when you move fast: higher = less lag.",
     max_grab: "Above this grip the cursor stops (close your hand to let go).",
+    precision: "Cursor travel per mm of hand movement once the hand settles (1 = off).",
+    dwell: "How long (s) the hand must stay slow before precision starts.",
+    enter_speed: "Hand speed (mm/s) below which precision can start.",
+    exit_speed: "Hand speed (mm/s) above which precision ends and the cursor follows the hand.",
+    radius: "Distance (mm) from where precision started at which movement is 1:1 again.",
+    edge: "Distance (mm) from the view's limits where precision is off, so the screen edges always reach.",
+    rest: "Hand tremor (mm) ignored while precise.",
+    glide: "Time (s) for the cursor to glide back onto the hand after precision.",
+    tap_hold: "How long (s) the cursor holds after a finger tap.",
+    tap_trigger: "How far (mm) a fingertip must move against the palm to count as a tap.",
+    tap_still: "The palm must be slower than this (mm/s) for a finger move to count as a tap.",
   };
   const defaults = (name) => structuredClone($state.snapshot(orion.gestureDefaults[name] ?? {}));
   const reset = (name) => (orion.draft.gestures[name] = defaults(name));

@@ -6,6 +6,7 @@ import numpy as np
 
 from . import Continuous, continuous, register
 from .fingers import FingerMotion
+from .precision import PrecisionLock
 
 
 def _pinch_point(h):
@@ -116,50 +117,47 @@ class DesktopPointer(Pointer):
     top-left. The view is `view_width` mm wide (centred over the device) and `view_top` mm tall above the device; the inner
     `coverage` of it reaches the left, right and top screen edges before the hand leaves view, and
     the bottom edge sits at `bottom` mm so the hand never has to come down to the device.
-    Fine control: cursor = hand position + a small `offset`. Slow movement is scaled down to `fine` times
-    (so a 4K button is easy to land on), which builds the offset (at most `reach` mm); fast sweeps run 1:1
-    and clear it by distance travelled; within `edge` mm of the view's limits it fades out, so a fully
-    extended hand always reaches the screen edge. `rest` (mm) is a tiny latch that ignores tremor."""
+    Precision: after `dwell` s slower than `enter_speed` mm/s (and over `edge` mm from the view's limits) the
+    cursor stops following the hand 1:1 and moves `precision` times as far, rising to 1:1 at `radius` mm from
+    where it locked; tremor under `rest` mm is ignored. Faster than `exit_speed`, or near the limits, it
+    glides back onto the hand over `glide` s, so the limits always reach the screen edges. A finger tap
+    (`tap_trigger`, `tap_still`) undoes the palm's dip and holds the cursor until `tap_hold` s after."""
     name, mode = "desktop_pointer", "raw"
     doc = __doc__
-    params = {**Pointer.params, "steady": (0.6, 0.1, 5.0), "responsive": (0.16, 0.0, 0.2),
+    params = {**{k: v for k, v in Pointer.params.items() if k != "tap_damp"},
+              "steady": (0.6, 0.1, 5.0), "responsive": (0.16, 0.0, 0.2),
               "view_width": (251, 150, 800), "view_top": (351, 250, 700), "coverage": (0.85, 0.5, 1.0),
-              "bottom": (150, 40, 300), "fine": (0.94, 0.05, 1.0), "fine_speed": (207, 10, 400),
-              "reach": (34, 5, 150), "edge": (26, 1, 100), "rest": (0.22, 0.0, 2.0)}
+              "bottom": (150, 40, 300), "precision": (0.2, 0.05, 1.0), "dwell": (0.10, 0.0, 1.0),
+              "enter_speed": (40, 5, 200), "exit_speed": (150, 20, 600), "radius": (25, 1, 100),
+              "edge": (20, 0, 100), "rest": (0.2, 0.0, 2.0), "glide": (0.12, 0.01, 1.0), "tap_hold": (0.30, 0.0, 1.0)}
 
     def __init__(self, overrides=None):
         super().__init__(overrides)
-        self.cur = {}  # hand side → (offset mm, last hand mm, last time)
-        self.held = {}  # hand side → hand position after the rest latch
+        self.locks = {}  # hand side → (PrecisionLock, FingerMotion)
+        self.precise = set()  # hand sides currently in precision
+
+    def _damp(self, h, pos, p, fresh):  # taps are handled by the PrecisionLock instead
+        return pos
+
+    def update(self, frame):
+        yield from super().update(frame)
+        self.precise &= set(self.state)  # a hand that left or made a fist is no longer precise
 
     def check(self, h, p):
         fresh = h.side not in self.state
         hand = super().check(h, p)
         if hand is None:
             return None
-        half = p["coverage"] * p["view_width"] / 2
+        half = max(p["coverage"] * p["view_width"] / 2, 1.0)
         top = max(p["coverage"] * p["view_top"], p["bottom"] + 1)
         lo, hi = np.array([-half, p["bottom"]]), np.array([half, top])
-        hand = np.clip(hand, lo, hi)
-        held = self.held.get(h.side)
-        if held is not None and not fresh:  # rest latch: tremor under `rest` mm leaves the hand "put"; beyond it we trail by `rest`
-            d = hand - held
-            n = float(np.linalg.norm(d))
-            hand = held if n <= p["rest"] else held + d * (1 - p["rest"] / n)
-        self.held[h.side] = hand
-        offset, last, t = (np.zeros(2), hand, self.t) if fresh else self.cur.get(h.side, (np.zeros(2), hand, self.t))
-        step = hand - last
-        dist = float(np.linalg.norm(step))
-        v2 = (dist / max(self.t - t, 1e-3)) ** 2
-        fast = v2 / (v2 + p["fine_speed"] ** 2)  # 0 slow … 1 fast
-        offset = (offset + (p["fine"] + (1 - p["fine"]) * fast - 1) * step) * math.exp(-dist * fast / 20)
-        n = float(np.linalg.norm(offset))
-        if n > p["reach"]:
-            offset *= p["reach"] / n
-        self.cur[h.side] = (offset, hand, self.t)
-        room = min(float(np.min(hand - lo)), float(np.min(hi - hand))) / p["edge"]  # 0 at the limit
-        room = min(max(room, 0.0), 1.0)
-        cursor = np.clip(hand + offset * room * room * (3 - 2 * room), lo, hi)
+        if fresh:  # a returning hand starts in coarse mode, on the plain mapping
+            self.locks[h.side] = (PrecisionLock(p), FingerMotion())
+        lock, fm = self.locks[h.side]
+        speed = float(np.linalg.norm(self.filters[h.side].dx))  # filtered palm speed, mm/s
+        tap = fm.update(self.t, np.array([f.tip - h.palm for f in h.fingers]), speed, p["tap_trigger"], p["tap_still"])
+        cursor = lock.step(self.t, np.clip(hand, lo, hi), speed, tap, lo, hi)
+        (self.precise.add if lock.precise else self.precise.discard)(h.side)
         return np.clip(((cursor[0] + half) / (2 * half), (top - cursor[1]) / (top - p["bottom"])), 0.0, 1.0)
 
 
