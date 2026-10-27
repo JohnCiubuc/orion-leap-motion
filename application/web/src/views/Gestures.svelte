@@ -1,6 +1,6 @@
 <script>
   // Gesture library: enable/disable, tune parameters, record new path shapes.
-  import { ChevronDown } from "@lucide/svelte";
+  import { ChevronDown, RotateCcw } from "@lucide/svelte";
   import Switch from "../components/Switch.svelte";
   import { orion, send } from "../lib/link.svelte.js";
 
@@ -14,8 +14,39 @@
   let open = $state({});
   let shapeName = $state("");
   const title = (n) => n.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
-  const conf = (name) => (orion.draft.gestures[name] ??= {});
+  const conf = (name) => ((orion.draft.gestures[name] ??= {}), orion.draft.gestures[name]); // reactive proxy, not the raw {}
   const enabled = (name) => orion.draft?.gestures?.[name]?.enabled ?? true;
+  // One-line explanations for tuning params (shown under each control). Plugins' own params show without one.
+  const HELP = {
+    hold: "Seconds the pose must be held before it fires.",
+    still: "Max hand speed (mm/s) that still counts as holding still; moving faster cancels it.",
+    pinch: "How tightly thumb and index must touch (0 = open, 1 = touching).",
+    grab: "How closed the hand must be (0 = open, 1 = tight fist).",
+    strength: "How firm the pinch or grip must be to count (0–1).",
+    min_up: "How straight up the thumb must point (1 = vertical).",
+    min_down: "How straight down the thumb must point (1 = vertical).",
+    facing: "How squarely the palm must face the screen (1 = straight on).",
+    window: "Time span (s) the movement is measured over.",
+    cooldown: "Pause (s) after firing before it can fire again.",
+    distance: "How far (mm) the hand must travel.",
+    open_hand: "Only count it with an open hand.",
+    threshold: "How alike the movement must be to the pattern (higher = stricter).",
+    depth: "How far (mm) the fingertip must dip.",
+    min_length: "Shortest stroke (mm) that counts as a drawing.",
+    step: "Distance (mm) per event; the start point resets after each one.",
+    axis: "What counts as up/down: raising, pushing away, or both.",
+    track: "Which part of the hand steers the cursor.",
+    steady: "Smoothing when still: lower = steadier but slower to start.",
+    responsive: "How quickly smoothing drops when you move fast: higher = less lag.",
+    max_grab: "Above this grip the cursor stops (close your hand to let go).",
+  };
+  const defaults = (name) => structuredClone($state.snapshot(orion.gestureDefaults[name] ?? {}));
+  const reset = (name) => (orion.draft.gestures[name] = defaults(name));
+  const modified = (name) => JSON.stringify(orion.draft?.gestures?.[name] ?? {}) !== JSON.stringify(orion.gestureDefaults[name] ?? {});
+  const resetAll = () => {
+    if (!confirm("Reset every gesture to its default settings? Takes effect when you save.")) return;
+    for (const g of orion.gestures) if (modified(g.name)) reset(g.name);
+  };
   const value = (g, k) => orion.draft?.gestures?.[g.name]?.[k] ?? g.params[k][0];
   const step = ([d, lo, hi]) => (Number.isInteger(d) && Number.isInteger(hi) && hi - lo >= 10 ? 1 : (hi - lo) / 100);
 </script>
@@ -23,6 +54,9 @@
 <header>
   <h1>Gestures</h1>
   <p class="muted">{orion.gestures.length} gestures loaded. Changes apply when you save.</p>
+  <button class="ghost reset-all" onclick={resetAll} disabled={!orion.gestures.some((g) => modified(g.name))}>
+    <RotateCcw size={14} /> Reset all to defaults
+  </button>
 </header>
 
 {#if orion.draft}
@@ -64,8 +98,12 @@
                                oninput={(e) => (conf(g.name)[k] = +e.target.value)} />
                         <b>{+(+value(g, k)).toFixed(2)}</b>
                       {/if}
+                      {#if HELP[k]}<small>{HELP[k]}</small>{/if}
                     </label>
                   {/each}
+                  <button class="ghost reset" onclick={() => reset(g.name)} disabled={!modified(g.name)}>
+                    <RotateCcw size={13} /> Reset to defaults
+                  </button>
                 </div>
               {/if}
             </div>
@@ -89,6 +127,8 @@
 
 <style>
   header { display: flex; align-items: baseline; gap: 16px; margin-bottom: 22px; }
+  .reset-all { margin-left: auto; }
+  .reset { grid-column: 1 / -1; justify-self: start; }
   section { margin-bottom: 26px; max-width: 980px; }
   .famhead { display: flex; align-items: baseline; gap: 12px; margin-bottom: 10px; }
   .list { overflow: hidden; }
@@ -103,7 +143,8 @@
   .pulse.fired { animation: fire 1.4s ease-out; }
   @keyframes fire { from { background: var(--rigel); box-shadow: 0 0 12px var(--rigel); } to { background: var(--line); box-shadow: none; } }
   .params { grid-column: 2 / -1; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px 24px; padding: 4px 0 4px; }
-  .params label { display: grid; grid-template-columns: 96px 1fr 44px; align-items: center; gap: 10px; font-size: 12.5px; color: var(--dust); }
+  .params label { display: grid; grid-template-columns: 96px 1fr 44px; align-items: center; gap: 4px 10px; font-size: 12.5px; color: var(--dust); align-self: start; }
+  .params small { grid-column: 1 / -1; font-size: 11.5px; line-height: 1.35; color: #8a93b8b0; }
   .params b { color: var(--star); font-weight: 500; text-align: right; font-variant-numeric: tabular-nums; }
   .record { display: flex; align-items: center; gap: 10px; padding: 12px 16px; background: var(--void); flex-wrap: wrap; }
   .record p { flex: 1 1 100%; font-size: 13px; }

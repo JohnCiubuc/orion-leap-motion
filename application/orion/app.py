@@ -7,14 +7,17 @@ while the panel is open (closing it to the tray frees the browser engine).
 from __future__ import annotations
 
 import argparse
+import atexit
 import logging
 import os
 import signal
 import sys
+import threading
 from pathlib import Path
 
 from .config import Config
 from .engine import Engine
+from .overlay import OverlayHost
 from .server import Server
 
 ICON = Path(__file__).with_name("assets") / "orion.svg"
@@ -40,6 +43,11 @@ def main():
     server = Server(engine, port=args.port or cfg.general["port"], dev=args.dev)
     server.start()
     engine.start(replay=args.replay)
+    from .actions import uinput  # create the virtual mouse/keyboard now, not on the first gesture
+    threading.Thread(target=uinput.warmup, daemon=True).start()
+    overlay = OverlayHost(engine)
+    overlay.configure(cfg["overlay"])
+    atexit.register(overlay.stop)
     print(f"Orion UI: {server.url}" + (f"\n  dev: http://localhost:5173/?port={server.port}&token={server.token}"
                                        if args.dev else ""), flush=True)
     if args.headless:
@@ -104,8 +112,11 @@ def run_qt(engine: Engine, server: Server, hidden: bool):
     pause.toggled.connect(engine.set_paused)
     air = QAction("Air mouse", menu, checkable=True)
     air.toggled.connect(lambda on: engine.set_mode("air_mouse", on))
+    desk = QAction("Desktop mouse", menu, checkable=True)
+    desk.toggled.connect(lambda on: engine.set_mode("desktop_mouse", on))
     menu.addAction(pause)
     menu.addAction(air)
+    menu.addAction(desk)
     menu.addAction("Restart controller", lambda: engine.restart_device())
     profile = menu.addAction("")
     profile.setEnabled(False)
@@ -116,7 +127,8 @@ def run_qt(engine: Engine, server: Server, hidden: bool):
 
     def sync_tray():  # reflect changes made from the UI / gestures
         s = engine.status()
-        for act, on in ((pause, s["paused"]), (air, "air_mouse" in s["modes"])):
+        for act, on in ((pause, s["paused"]), (air, "air_mouse" in s["modes"]),
+                        (desk, "desktop_mouse" in s["modes"])):
             act.blockSignals(True)
             act.setChecked(on)
             act.blockSignals(False)

@@ -165,6 +165,9 @@ class Server:
             e.set_recording(bool(m["on"]))
         elif cmd == "replay":
             e.replay(str(RECORDINGS_DIR / m["file"]) if m.get("file") else None)
+        elif cmd == "overlay_test":
+            if e.overlay:
+                e.overlay.show("Swipe left", "hypr.dispatch", "right")
         elif cmd == "restart_device":
             e.restart_device(service=bool(m.get("service")))
         elif cmd == "capture":

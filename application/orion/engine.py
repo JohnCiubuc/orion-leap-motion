@@ -4,17 +4,20 @@ from __future__ import annotations
 
 import importlib.util
 import logging
+import re
 import sys
 import threading
 import time
+import tomllib
 from collections import deque
 
 from . import actions, gestures
-from .actions import ACTIONS, Executor
-from .config import PLUGIN_DIR, RECORDINGS_DIR, TEMPLATES_FILE, Config
+from .actions import ACTIONS, Executor, hyprland, uinput
+from .config import DEFAULT_FILE, PLUGIN_DIR, RECORDINGS_DIR, TEMPLATES_FILE, Config
 from .frame import Frame
 from .gestures import REGISTRY, GestureEvent
 from .gestures.paths import PathGesture
+from .handedness import Handedness
 from .router import Router
 from .sources import DemoSource, LeapSource, Recorder, ReplaySource
 
@@ -42,6 +45,10 @@ def load_plugins() -> list[dict]:
     return found
 
 
+def _label(mode: str) -> str:
+    return mode.replace("_", " ").capitalize()
+
+
 class Engine:
     def __init__(self, config: Config, demo=False, dry_run=None):
         self.cfg, self.demo = config, demo
@@ -52,11 +59,13 @@ class Engine:
         self.executor = Executor(on_error=lambda a, e: self.emit("error", {"action": a, "error": e}))
         self.router = Router(config, lambda *a: None if self.dry_run else self.executor.submit(*a))
         self.recorder = Recorder(RECORDINGS_DIR)
+        self.handedness = Handedness(config)
         self.feed = deque(maxlen=50)  # recent gesture events for the UI
-        self.source = None
+        self.source = self.overlay = None
         self.lock = threading.Lock()
         self.last_frame = self.last_restart = time.monotonic()
         self._restarting = threading.Lock()
+        self._follow: dict[str, dict] = {}  # mode → {since, seen}: modes that end when their app closes
         self.build_gestures()
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -98,13 +107,16 @@ class Engine:
         self.build_gestures()
         if self.source:
             self.source.ir_fps = self.cfg.general["ir_fps"]
+        if self.overlay:
+            self.overlay.configure(self.cfg["overlay"])
         self.emit_state()
 
     # ── Pipeline (runs on the source thread) ──────────────────────────────────
 
     def on_frame(self, frame: Frame):
         self.last_frame = time.monotonic()
-        self.recorder.write(frame)
+        self.recorder.write(frame)  # raw labels, so replays go through the same filter
+        frame = self.handedness(frame)
         with self.lock:
             events = [e for g in self.gestures for e in g.update(frame)]
         for ev in events:
@@ -127,14 +139,53 @@ class Engine:
 
     # ── Controls (UI, tray, orion.* actions) ──────────────────────────────────
 
-    def set_mode(self, mode: str, on: bool | None = None):
-        on = (mode not in self.router.modes) if on is None else on
-        (self.router.modes.add if on else self.router.modes.discard)(mode)
+    def set_mode(self, mode: str, on: bool | None = None) -> bool:
+        """Switch a mode on/off, running its on_enter/on_exit hooks. An exclusive mode is the only
+        mode while it is on: enabling it turns the others off, and others can't be enabled meanwhile."""
+        modes, cfg = self.router.modes, self.cfg["modes"]
+        on = (mode not in modes) if on is None else on
+        if on and mode in modes and mode in cfg:  # asked "on" again (not a toggle): rerun the hooks, e.g. reopen a menu
+            if cfg[mode].get("follow_app"):
+                self._follow[mode] = {"since": time.monotonic(), "seen": False}
+            self._hooks(mode, "on_enter")
+            return True
+        if on == (mode in modes) or (on and mode not in cfg):
+            return False
+        if on:
+            blocker = next((m for m in modes if cfg.get(m, {}).get("exclusive")), None)
+            if blocker:
+                self.emit("notice", {"text": f"{_label(blocker)} is exclusive. Turn it off first."})
+                return False
+            if cfg[mode].get("exclusive"):
+                for other in list(modes):
+                    self._leave(other)
+            modes.add(mode)
+            if cfg[mode].get("follow_app"):
+                self._follow[mode] = {"since": time.monotonic(), "seen": False}
+            self._hooks(mode, "on_enter")
+        else:
+            self._leave(mode)
+        self.emit("notice", {"text": f"{_label(mode)} {'on' if on else 'off'}"})
         with self.lock:  # restart continuous gestures so the new bindings see a fresh "begin"
             for g in self.gestures:
                 if g.family == "continuous":
                     g.reset()
         self.emit_state()
+        return True
+
+    def _leave(self, mode: str):
+        self.router.modes.discard(mode)
+        self._follow.pop(mode, None)
+        self._hooks(mode, "on_exit")
+
+    def _hooks(self, mode: str, when: str):
+        """Run a mode's hook actions (launch an app, a Hyprland dispatch, a global shortcut…)."""
+        for hook in self.cfg["modes"].get(mode, {}).get(when, []):
+            act = ACTIONS.get(hook.get("action", ""))
+            if act is None:
+                self.emit("error", {"action": f"{mode} {when}", "error": f"unknown action {hook.get('action')}"})
+            elif not self.dry_run:
+                self.executor.submit(act, GestureEvent(f"mode.{mode}", "fire", when, None, 0.0), hook.get("args", {}))
 
     def restart_device(self, service=False, reason=""):
         """Wake a sleeping controller (see device.py). Runs in the background; reports via notices."""
@@ -160,11 +211,40 @@ class Engine:
                 and idle > limit and time.monotonic() - self.last_restart > 60):
             self.restart_device(reason=f" (no frames for {int(idle)} s)")
 
+        self._follow_apps()
+
+    def _follow_apps(self):
+        """Modes with follow_app: wait `follow_grace` s for a matching window, then switch the
+        mode off once the last one closes (or if it never appeared)."""
+        if not self._follow:
+            return
+        classes = hyprland.window_classes()
+        if classes is None:
+            return  # can't see windows (not under Hyprland): leave modes alone
+        for mode, st in list(self._follow.items()):
+            conf = self.cfg["modes"].get(mode, {})
+            try:
+                rx = re.compile(conf.get("follow_app", ""))
+            except re.error:
+                continue
+            if any(c and rx.search(c) for c in classes):
+                st["seen"] = True
+            elif st["seen"]:
+                self._auto_off(mode, "its app closed")
+            elif time.monotonic() - st["since"] > conf.get("follow_grace", 15):
+                self._auto_off(mode, "its app didn't open in time")
+
+    def _auto_off(self, mode: str, why: str):
+        self.set_mode(mode, False)
+        self.emit("notice", {"text": f"{_label(mode)} off: {why}"})
+
     @property
     def streaming(self) -> bool:
         return time.monotonic() - self.last_frame < 2
 
     def set_paused(self, paused: bool):
+        if paused != self.router.paused:
+            self.emit("notice", {"text": "Gestures paused" if paused else "Gestures resumed"})
         self.router.paused = paused
         self.emit_state()
 
@@ -197,15 +277,18 @@ class Engine:
                 "profile": self.router.profile, "window": self.router.window,
                 "modes": sorted(self.router.modes), "recording": self.recorder.active,
                 "capture": capture, "engage_required": self.router.engage_required,
-                "armed": self.router.armed, "dry_run": self.dry_run, "time": time.time()}
+                "armed": self.router.armed, "dry_run": self.dry_run, "time": time.time(),
+                "overlay": self.overlay.status if self.overlay else "off", "input": uinput.status}
 
     def state(self) -> dict:
         return {
             "status": self.status(),
             "config": self.cfg.data,
+            "gesture_defaults": tomllib.loads(DEFAULT_FILE.read_text()).get("gestures", {}),
             "gestures": [cls.meta() for cls in REGISTRY.values()],
             "actions": [a.meta() for a in ACTIONS.values()],
             "plugins": self.plugins,
             "recordings": sorted((p.name for p in RECORDINGS_DIR.glob("*.orec")), reverse=True),
+            "global_shortcuts": hyprland.global_shortcuts(),
             "feed": list(self.feed),
         }

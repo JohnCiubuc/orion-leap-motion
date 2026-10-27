@@ -8,13 +8,40 @@ engage_window = 2.0      # seconds a gesture may follow "engage"
 ir_fps = 30              # raw IR stream rate in the dashboard
 port = 0                 # local UI port (0 = random free port)
 auto_wake = 10           # restart the controller after this many seconds without frames (0 = off)
+preferred_hand = "left"  # side a new hand gets until the tracker is sure: left | right | none
+
+# Gesture overlay: a translucent card in a corner of the focused monitor (layer-shell, click-through).
+[overlay]
+enabled = true
+opacity = 0.85           # 0.2 … 1
+seconds = 1.6            # how long each card stays
+corner = "top-right"     # top-right | top-left | bottom-right | bottom-left
+margin = 16              # px from the screen edges (bars like Waybar are already accounted for)
+show_unbound = false     # also show gestures that have no binding
 
 # Per-gesture tuning: [gestures.<name>] enabled = false / <param> = value
 [gestures.swipe]
 distance = 110
 
 [gestures.pointer]
-track = "palm"           # what steers the air mouse: palm | knuckles | index | middle | pinch
+track = "palm"           # what steers the air mouse: palm | palm_stable | knuckles | index | middle | pinch
+
+# Desktop mouse: the controller's view is mapped onto the whole desktop (all monitors).
+# The view is view_width mm wide (centred over the device) and view_top mm tall above the device.
+# The inner `coverage` of it reaches the left, right and top screen edges, so the cursor is in
+# the corner before the hand leaves view; the bottom screen edge is at `bottom` mm above the device.
+[gestures.desktop_pointer]
+track = "palm"
+coverage = 0.85
+view_width = 251
+view_top = 351
+bottom = 150
+fine = 0.94              # cursor travel per mm of slow hand movement (1 = off)
+fine_speed = 207         # mm/s where movement becomes 1:1
+rest = 0.22              # mm of tremor ignored
+edge = 26                # mm from the view's limits where fine control fades out
+reach = 34               # mm: most the cursor can lag the hand
+responsive = 0.16
 
 # Profiles activate when the focused window's class matches `match` (regex).
 # Bindings with profile = "<name>" override "default" bindings for the same gesture.
@@ -25,11 +52,23 @@ match = "(?i)^zen"
 match = "(?i)spotify"
 
 # Modes are groups of bindings toggled at runtime (tray, or the orion.mode action).
-# exclusive = only that mode's bindings (and orion.* actions) fire while it is on.
+# exclusive = only that mode's bindings (and orion.* actions) fire while it is on, and no other
+#             mode can be on at the same time.
+# on_enter / on_exit = actions run when the mode turns on / off, e.g.
+#   on_enter = [{ action = "shell", args = { cmd = "kitty" } },
+#               { action = "hypr.global", args = { shortcut = "kando:example-menu" } }]
+# follow_app = window-class regex: the mode turns itself off when that app's last window closes
+#              (or if no such window appears within follow_grace seconds, default 15).
 [modes.air_mouse]
 exclusive = true
 
+# Desktop mouse: the cursor goes where the hand is (absolute), instead of moving with it like air mouse.
+[modes.desktop_mouse]
+exclusive = true
+
 # ── Default profile ──────────────────────────────────────────────────────────
+# hypr.dispatch takes classic syntax ("workspace e+1"), translated automatically when Hyprland
+# runs a Lua config, or Lua directly: cmd = 'hl.dsp.focus({ workspace = "e+1" })'.
 [[bindings]]
 gesture = "swipe.left"
 action = "hypr.dispatch"
@@ -56,7 +95,7 @@ action = "audio.dial"
 [[bindings]]
 gesture = "palm_flip.up"
 action = "hypr.dispatch"
-args = { cmd = "togglespecialworkspace" }
+args = { cmd = "togglespecialworkspace magic" }
 
 [[bindings]]
 gesture = "path.circle"
@@ -161,3 +200,29 @@ gesture = "fist"
 action = "orion.mode"
 args = { mode = "air_mouse", state = "off" }
 mode = "air_mouse"
+
+# ── Desktop mouse mode ───────────────────────────────────────────────────────
+# Turn it on from the tray or Profiles → Modes, or bind a gesture to orion.mode desktop_mouse.
+[[bindings]]
+gesture = "desktop_pointer"
+action = "input.desktop"
+args = { display = "" }  # a Hyprland monitor name (e.g. "DP-3") keeps the cursor on that display
+mode = "desktop_mouse"
+
+[[bindings]]
+gesture = "pinch"
+action = "input.button"
+args = { button = "left" }
+mode = "desktop_mouse"
+
+[[bindings]]
+gesture = "peace"
+action = "input.click"
+args = { button = "right" }
+mode = "desktop_mouse"
+
+[[bindings]]
+gesture = "fist"
+action = "orion.mode"
+args = { mode = "desktop_mouse", state = "off" }
+mode = "desktop_mouse"

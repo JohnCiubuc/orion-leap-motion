@@ -17,6 +17,12 @@ fi
 log "Installing Orion Renewal (editable) into .venv…"
 "$VENV/bin/pip" install --quiet -e "$APP[dev]"
 
+# ── Gesture overlay: GTK4 layer-shell, runs under the system Python ─────────
+if ! pacman -Q gtk4-layer-shell python-gobject >/dev/null 2>&1; then
+  read -rp "Install the on-screen gesture overlay (gtk4-layer-shell, python-gobject; uses sudo)? [Y/n] " ans
+  [[ "${ans:-y}" =~ ^[Yy] ]] && sudo pacman -S --needed gtk4-layer-shell python-gobject
+fi
+
 # ── Web UI ───────────────────────────────────────────────────────────────────
 command -v npm >/dev/null || die "npm not found (sudo pacman -S npm)."
 log "Building the interface…"

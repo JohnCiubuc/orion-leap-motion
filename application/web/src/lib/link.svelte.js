@@ -10,9 +10,11 @@ export const orion = $state({
   config: null, // last config from the engine
   draft: null, // editable copy (Bindings / Profiles / Settings)
   gestures: [],
+  gestureDefaults: {}, // [gestures.<name>] tables from the shipped default.toml
   actions: [],
   plugins: [],
   recordings: [],
+  globalShortcuts: [], // [{ name, description }] registered via the desktop portal (hyprctl globalshortcuts)
   feed: [], // recent gesture events, newest first
   flash: {}, // gesture base name → timestamp of last event (UI highlights)
   errors: [],
@@ -70,7 +72,8 @@ function decodeIR(buf) {
 function onState(s) {
   const wasDirty = orion.draft && dirty();
   Object.assign(orion, { status: s.status, gestures: s.gestures, actions: s.actions,
-    plugins: s.plugins, recordings: s.recordings, feed: [...s.feed].reverse(), config: s.config });
+    plugins: s.plugins, recordings: s.recordings, globalShortcuts: s.global_shortcuts ?? [], feed: [...s.feed].reverse(), config: s.config,
+    gestureDefaults: s.gesture_defaults ?? {} });
   if (!wasDirty) discardDraft(); // keep unsaved edits; otherwise follow the engine (hand edits)
 }
 

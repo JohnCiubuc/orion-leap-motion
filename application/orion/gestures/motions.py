@@ -22,14 +22,22 @@ def swipe(tr, p):
     return None
 
 
-@motion("palm_flip", window=0.8, cooldown=0.8, variants=("up", "down"), threshold=(0.6, 0.3, 0.95))
+@motion("palm_flip", window=0.8, cooldown=0.8, variants=("up", "down", "vertical"),
+        threshold=(0.6, 0.3, 0.95), hold=(0.5, 0.1, 2.0))
 def palm_flip(tr, p):
-    """Palm turned over: "up" = now facing up, "down" = now facing down."""
+    """Palm turned over: "up" = now facing up, "down" = now facing down,
+    "vertical" = turned edge-on (facing sideways) and held for `hold` seconds."""
     a, b, k = tr.normal[0][1], tr.normal[-1][1], p["threshold"]
     if a < -k and b > k:
         return "up"
     if a > k and b < -k:
         return "down"
+    # shortcut: history is only `window` long, so a hold longer than window never fires; raise window too.
+    edge = np.abs(tr.normal[:, 1]) < 1 - k
+    held = tr.t >= tr.t[-1] - p["hold"]
+    # Needs a non-vertical sample before the hold, so holding it doesn't re-fire after the cooldown.
+    if edge[held].all() and not edge[~held].all():
+        return "vertical"
     return None
 
 

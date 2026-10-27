@@ -31,7 +31,8 @@ class Config:
     def load(self):
         defaults = tomllib.loads(DEFAULT_FILE.read_text())
         self.data = tomllib.loads(self.path.read_text())
-        self.data["general"] = {**defaults["general"], **self.data.get("general", {})}
+        for table in ("general", "overlay"):  # settings tables always carry every default key
+            self.data[table] = {**defaults[table], **self.data.get(table, {})}
         for key in ("gestures", "profiles", "modes"):
             self.data.setdefault(key, {})
         self.data.setdefault("bindings", [])
@@ -68,13 +69,50 @@ def _merge(doc, data: dict):
     for k, v in data.items():
         if isinstance(v, dict) and isinstance(doc.get(k), dict):
             _merge(doc[k], v)
+        elif k not in doc and hasattr(doc, "value"):
+            _insert_after_keys(doc, k, _clean(v), plain=_is_plain(v))  # next to its siblings, not after trailing comments
         elif doc.get(k) != v:
             doc[k] = _clean(v)
 
 
-def _clean(v):  # drop None (TOML has no null)
+def _is_plain(v) -> bool:  # scalars and simple lists: values that live on one line
+    return not isinstance(v, dict) and not (isinstance(v, list) and any(isinstance(x, dict) for x in v))
+
+
+def _insert_after_keys(table, key, value, plain=True):
+    """Place a new `key` next to its siblings instead of after the comments that introduce the next
+    section. Plain keys go before any sub-tables ([[x.on_enter]]), where TOML would silently file
+    them under that sub-table; new sub-tables go after the last existing entry."""
+    body = table.value.body
+    keys = [i for i, (k, v) in enumerate(body) if k is not None
+            and not (plain and isinstance(v, (tomlkit.items.Table, tomlkit.items.AoT)))]
+    at = (keys[-1] + 1) if keys else 0
+    if at >= len(body):
+        table[key] = value
+    else:
+        table.value._insert_at(at, key, value)
+
+
+def _clean(v):
+    """Python → tomlkit: drop None (TOML has no null); lists of tables stay [[tables]] with
+    nested dicts written inline, e.g. `args = { cmd = "…" }`, like the hand-written file."""
+    if isinstance(v, list) and v and all(isinstance(x, dict) for x in v):
+        aot = tomlkit.aot()
+        for item in v:
+            t = tomlkit.table()
+            for k, x in item.items():
+                if x is not None:
+                    t[k] = _inline(x) if isinstance(x, dict) else _clean(x)
+            aot.append(t)
+        return aot
     if isinstance(v, dict):
         return {k: _clean(x) for k, x in v.items() if x is not None}
     if isinstance(v, list):
         return [_clean(x) for x in v]
     return v
+
+
+def _inline(d: dict):
+    t = tomlkit.inline_table()
+    t.update({k: x for k, x in d.items() if x is not None})
+    return t

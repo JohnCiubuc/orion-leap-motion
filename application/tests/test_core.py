@@ -16,6 +16,7 @@ from orion.gestures import REGISTRY, GestureEvent, load_builtins  # noqa: E402
 from orion.gestures.paths import PathGesture, _resample  # noqa: E402
 from orion.router import Router  # noqa: E402
 from orion.sim import make_hand  # noqa: E402
+from orion.frame import FINGERS  # noqa: E402
 
 load_builtins()
 load_actions()
@@ -74,6 +75,14 @@ def test_slow_move_is_not_a_swipe():
 def test_palm_flip():
     frames = [Frame(t=i / 100, hands=(make_hand(normal=(0, -1 + 2 * min(i, 40) / 40, 0.01)),)) for i in range(60)]
     assert run(REGISTRY["palm_flip"](), frames) == [("palm_flip.up", "fire")]
+
+
+def test_palm_flip_vertical():
+    flat, edge = make_hand(normal=(0, -1, 0)), make_hand(normal=(1, 0, 0))
+    turn = [Frame(t=i / 100, hands=(flat if i < 20 else edge,)) for i in range(200)]
+    assert run(REGISTRY["palm_flip"](), turn) == [("palm_flip.vertical", "fire")]  # once, not every cooldown
+    assert run(REGISTRY["palm_flip"]({"hold": 0.5}), turn[:65]) == []  # 0.45 s held: too short
+    assert run(REGISTRY["palm_flip"](), hold(edge, 2.0)) == []  # arrives already edge-on: no turn
 
 
 def test_tap():
@@ -274,11 +283,114 @@ def test_engage_covers_a_whole_joystick_hold(router):
     assert len(router.calls) == 3
 
 
-@pytest.mark.parametrize("track", ["palm", "knuckles", "index", "middle", "pinch"])
+@pytest.mark.parametrize("track", ["palm", "palm_stable", "knuckles", "index", "middle", "pinch"])
 def test_pointer_tracks_chosen_point(track):
-    g = REGISTRY["pointer"]({"track": track, "smoothing": 0})
+    g = REGISTRY["pointer"]({"track": track, "steady": 5.0})
     evs = [e for i in range(3) for e in g.update(Frame(t=i, hands=(make_hand(palm=(i * 10, 200, 0)),)))]
-    assert evs[-1].value[0] == pytest.approx(10)  # moved 10 mm right per frame
+    assert evs[-1].value[0] == pytest.approx(10, rel=0.05)  # moved 10 mm right per frame
+
+
+def test_pointer_moves_even_when_service_leaves_stabilized_position_empty():
+    frames = []
+    for i in range(30):
+        h = make_hand(palm=(i * 2.0, 200, 0))
+        h.stable[:] = 0  # what some service versions send
+        frames.append(Frame(t=i / 100, hands=(h,)))
+    for track in ("palm", "palm_stable"):
+        g = REGISTRY["pointer"]({"track": track})
+        moved = sum(e.value[0] for f in frames for e in g.update(f) if e.phase == "update")
+        assert moved > 20, track
+
+
+def test_pointer_filter_calms_jitter():
+    rng = np.random.default_rng(2)
+    g = REGISTRY["pointer"]()
+    steps = [e.value for i in range(200)
+             for e in g.update(Frame(t=i / 110, hands=(make_hand(palm=(*rng.normal(0, 1.0, 2), 0) + np.array([0, 200, 0])),)))
+             if e.phase == "update"]
+    assert np.abs(steps).mean() < 0.3  # raw jitter steps average ~1.1 mm
+
+
+def desktop_at(x, y, **params):
+    g = REGISTRY["desktop_pointer"]({"steady": 5.0, "view_width": 400, "view_top": 450, **params})  # the original geometry
+    evs = [e for i in range(5) for e in g.update(Frame(t=i / 100, hands=(make_hand(palm=(x, y, 0)),)))]
+    return evs[-1].value
+
+
+def test_desktop_pointer_maps_inner_view_to_whole_desktop():
+    assert desktop_at(0, (382.5 + 150) / 2) == pytest.approx((0.5, 0.5), abs=0.03)  # leaves a small gap by design
+    assert desktop_at(-170, 382.5) == pytest.approx((0.0, 0.0), abs=0.01)  # 85 % of the view: top-left corner
+    assert desktop_at(170, 150) == pytest.approx((1.0, 1.0), abs=0.01)  # bottom edge 150 mm above the device
+    assert desktop_at(-195, 440) == pytest.approx((0.0, 0.0))  # past the margin: pinned to the corner
+    assert desktop_at(0, 60)[1] == 1.0  # near the device: stays on the bottom edge
+
+
+def test_desktop_pointer_margins_are_configurable():
+    assert desktop_at(-100, 200, coverage=0.5, view_width=400)[0] == pytest.approx(0.0, abs=0.03)  # leaves a small gap by design
+    assert desktop_at(0, 100, bottom=100)[1] == pytest.approx(1.0, abs=0.03)  # leaves a small gap by design
+
+
+def test_desktop_pointer_stops_on_a_fist():
+    g = REGISTRY["desktop_pointer"]()
+    evs = [e for i in range(5) for e in g.update(Frame(t=i / 100, hands=(make_hand(extended=set()),)))]
+    assert evs == []
+
+
+def test_freeze_cursor_holds_the_desktop_pointer_too(router):
+    router.modes.add("m")
+    router.bindings += [{"gesture": "desktop_pointer", "action": "t.stream", "mode": "m"},
+                        {"gesture": "pinch_joy.up", "action": "t.once", "mode": "m", "freeze_pointer": True}]
+    router.route(ev("desktop_pointer", "begin", 1.0))
+    router.route(ev("pinch_joy", "begin", 1.01))
+    before = len(router.calls)
+    router.route(ev("desktop_pointer", "update", 1.02))
+    assert len(router.calls) == before
+
+
+def test_default_config_has_desktop_mouse_mode():
+    cfg = Config()
+    assert cfg["modes"]["desktop_mouse"]["exclusive"]
+    acts = {b["gesture"]: b["action"] for b in cfg["bindings"] if b.get("mode") == "desktop_mouse"}
+    assert acts["desktop_pointer"] == "input.desktop" and "input.desktop" in ACTIONS
+
+
+def test_desktop_action_writes_absolute_position(monkeypatch):
+    import evdev
+    from evdev import ecodes as e
+    from orion.actions import uinput
+    made = {}
+
+    class FakeUInput:
+        def __init__(self, caps, name):
+            self.caps, self.writes = caps, []
+            made[name] = self
+
+        def write(self, *a):
+            self.writes.append(a)
+
+        def syn(self):
+            pass
+
+    monkeypatch.setattr(evdev, "UInput", FakeUInput)
+    monkeypatch.setattr(uinput, "_mouse", None)
+    monkeypatch.setattr(uinput, "_abs", None)
+    assert uinput.warmup() == "ready"
+    dev = made["Orion Renewal desktop pointer"]
+    assert {c for c, _ in dev.caps[e.EV_ABS]} == {e.ABS_X, e.ABS_Y} and e.BTN_LEFT in dev.caps[e.EV_KEY]
+    ACTIONS["input.desktop"].fn(GestureEvent("desktop_pointer", "update", np.array([0.25, 1.0])), display="")
+    assert dev.writes == [(e.EV_ABS, e.ABS_X, uinput.ABS_MAX // 4 + 1), (e.EV_ABS, e.ABS_Y, uinput.ABS_MAX)]
+
+
+def test_desktop_action_can_target_one_display(monkeypatch):
+    import json
+    from orion.actions import hyprland, uinput
+    mons = [{"name": "DP-3", "x": 0, "y": 0, "width": 3840, "height": 2160, "scale": 1.0},
+            {"name": "HDMI-A-1", "x": 3840, "y": 0, "width": 1920, "height": 1080, "scale": 1.0}]
+    monkeypatch.setattr(hyprland, "hyprctl", lambda req: json.dumps(mons))
+    assert uinput._display_area("DP-3") == pytest.approx((0, 0, 3840 / 5760, 1))
+    assert uinput._display_area("HDMI-A-1") == pytest.approx((3840 / 5760, 0, 1920 / 5760, 0.5))
+    with pytest.raises(RuntimeError, match="DP-9"):
+        uinput._display_area("DP-9")
 
 
 def test_two_hand_pinch_is_not_a_joystick():
@@ -290,3 +402,275 @@ def test_two_hand_pinch_is_not_a_joystick():
 def test_moving_pinch_is_not_ok():
     moving = make_hand(extended={"middle", "ring", "pinky"}, pinch=0.95, velocity=(0, 150, 0))
     assert run(REGISTRY["ok"](), hold(moving, 1.5)) == []
+
+
+# ── Overlay ───────────────────────────────────────────────────────────────────
+
+def test_overlay_shows_only_meaningful_events():
+    from types import SimpleNamespace as NS
+    from orion.overlay import OverlayHost
+    host = OverlayHost(NS(listeners=[], dry_run=False))
+    sent = []
+    host.proc, host.cfg, host.send = object(), {"enabled": True}, sent.append
+    ev = lambda name, phase="fire", acts=("media",): {"name": name, "phase": phase, "actions": list(acts),  # noqa
+                                                     "hand": "right", "profile": "default"}
+    for e in (ev("pointer", "begin"), ev("pinch_joy", "begin"), ev("open_palm", "begin", ()),
+              ev("swipe.left"), ev("pinch_joy.up"), ev("path.circle")):
+        host.on_engine("event", e)
+    host.on_engine("notice", {"text": "Air mouse on"})
+    assert [m["title"] for m in sent] == ["Swipe left", "Pinch up", "Circle", "Air mouse on"]
+
+
+# ── Freeze cursor ─────────────────────────────────────────────────────────────
+
+def test_freeze_cursor_only_for_flagged_bindings(router):
+    moves = lambda: [c for c in router.calls if c[0] == "t.stream" and c[1] == "update"]  # noqa
+    router.bindings += [{"gesture": "pointer", "action": "t.stream", "mode": "m"},
+                        {"gesture": "pinch_joy.up", "action": "t.once", "mode": "m", "freeze_pointer": True},
+                        {"gesture": "pinch", "action": "t.stream", "mode": "m"}]  # drag: no freeze
+    router.modes.add("m")
+    router.route(ev("pointer", "begin", 1.0))
+    router.route(ev("pointer", "update", 1.01))
+    router.route(ev("pinch_joy", "begin", 1.02))  # scroll hold → frozen from the start
+    router.route(ev("pointer", "update", 1.03))
+    router.route(ev("pinch_joy.up", "fire", 1.2))
+    router.route(ev("pointer", "update", 1.3))
+    router.route(ev("pinch_joy", "end", 1.4))
+    router.route(ev("pointer", "update", 1.5))  # moves again
+    router.route(ev("pinch", "begin", 1.6))  # drag keeps moving
+    router.route(ev("pointer", "update", 1.7))
+    assert len(moves()) == 3
+
+
+def test_saved_bindings_keep_inline_args():
+    import tomllib
+    cfg = Config()
+    cfg.data["bindings"] = [{"gesture": "tap", "action": "shell", "args": {"cmd": "true"}, "freeze_pointer": True, "hand": None}]
+    cfg.save()
+    text = cfg.path.read_text()
+    assert 'args = {cmd = "true"}' in text.replace("{ ", "{").replace(" }", "}") and "[bindings.args]" not in text
+    assert tomllib.loads(text)["bindings"][0] == {"gesture": "tap", "action": "shell", "args": {"cmd": "true"}, "freeze_pointer": True}
+
+
+# ── Hyprland dispatch: classic vs Lua config ─────────────────────────────────
+
+@pytest.mark.parametrize("lua_mode", [False, True])
+def test_hypr_dispatch_speaks_the_config_language(monkeypatch, lua_mode):
+    from orion.actions import hyprland as hy
+    sent = []
+
+    def fake(req):
+        sent.append(req)
+        if req == "systeminfo":
+            return "Hyprland 0.55\nconfigProvider: lua\n" if lua_mode else "Hyprland 0.49\n"
+        return "ok"
+    monkeypatch.setattr(hy, "hyprctl", fake)
+    monkeypatch.setattr(hy, "_lua", None)
+    hy.dispatch(None, "workspace e-1")
+    want = 'dispatch hl.dsp.focus({ workspace = "e-1" })' if lua_mode else "dispatch workspace e-1"
+    assert sent[-1] == want
+
+
+def test_hypr_dispatch_retries_in_lua_when_rejected(monkeypatch):
+    from orion.actions import hyprland as hy
+    sent = []
+
+    def fake(req):
+        sent.append(req)
+        if req == "systeminfo":
+            return "Hyprland\n"  # looks classic…
+        if "hl.dsp" in req:
+            return "ok"
+        return "error: [string \"return hl.dispatch(workspace e-1)\"]:1: ')' expected → Note: dispatch in lua is hl.dispatch(...)"
+    monkeypatch.setattr(hy, "hyprctl", fake)
+    monkeypatch.setattr(hy, "_lua", None)
+    hy.dispatch(None, "workspace e-1")  # …but Hyprland rejects classic syntax: retried as Lua, no error
+    assert sent[-1].startswith("dispatch hl.dsp.focus") and hy._lua is True
+
+
+# ── Modes: hooks + exclusivity ───────────────────────────────────────────────
+
+@pytest.fixture
+def engine(monkeypatch):
+    from orion.engine import Engine
+    e = Engine(Config())
+    e.cfg.data["modes"] = {
+        "air": {"exclusive": True, "on_enter": [{"action": "t.hook", "args": {"tag": "air-on"}}],
+                "on_exit": [{"action": "t.hook", "args": {"tag": "air-off"}}]},
+        "present": {"on_enter": [{"action": "t.hook", "args": {"tag": "present-on"}}]},
+        "draw": {},
+    }
+    e.router.configure(e.cfg)
+    e.hooks = []
+    ACTIONS["t.hook"] = Action("t.hook", lambda ev, tag: None, {"tag": ""})
+    monkeypatch.setattr(e.executor, "submit", lambda act, ev, args: e.hooks.append(args["tag"]))
+    return e
+
+
+def test_mode_hooks_run_on_enter_and_exit(engine):
+    engine.set_mode("air", True)
+    engine.set_mode("air", False)
+    assert engine.hooks == ["air-on", "air-off"]
+
+
+def test_exclusive_mode_is_alone(engine):
+    engine.set_mode("present", True)
+    engine.set_mode("draw", True)
+    engine.set_mode("air", True)  # exclusive: switches the others off
+    assert engine.router.modes == {"air"}
+    assert engine.set_mode("present", True) is False  # blocked while air is on
+    assert engine.router.modes == {"air"}
+    engine.set_mode("air", False)
+    assert engine.set_mode("present", True) and engine.router.modes == {"present"}
+
+
+def test_global_shortcut_dispatch(monkeypatch):
+    from orion.actions import hyprland as hy
+    sent = []
+    monkeypatch.setattr(hy, "hyprctl", lambda req: sent.append(req) or ("configProvider: lua" if req == "systeminfo" else "ok"))
+    monkeypatch.setattr(hy, "_lua", None)
+    hy.global_shortcut(None, "kando:example-menu")
+    assert sent[-1] == 'dispatch hl.dsp.global("kando:example-menu")'
+    monkeypatch.setattr(hy, "_lua", False)
+    hy.global_shortcut(None, "kando:example-menu")
+    assert sent[-1] == "dispatch global kando:example-menu"
+
+
+def test_mode_hooks_saved_as_toml():
+    import tomllib
+    cfg = Config()
+    cfg.data["modes"]["air_mouse"]["on_enter"] = [{"action": "hypr.global", "args": {"shortcut": "kando:example-menu"}}]
+    cfg.save()
+    assert tomllib.loads(cfg.path.read_text())["modes"]["air_mouse"]["on_enter"][0]["args"]["shortcut"] == "kando:example-menu"
+
+
+def test_mode_follows_its_app(engine, monkeypatch):
+    import time as _t
+    from orion.actions import hyprland as hy
+    windows = {"kitty"}
+    monkeypatch.setattr(hy, "window_classes", lambda: set(windows))
+    engine.cfg.data["modes"]["draw"] = {"follow_app": "(?i)^krita$", "follow_grace": 5}
+    engine.set_mode("draw", True)
+    engine.watchdog()
+    assert "draw" in engine.router.modes  # app still starting: within the grace period
+    windows.add("krita")
+    engine.watchdog()
+    windows.discard("krita")  # app closed → mode off
+    engine.watchdog()
+    assert "draw" not in engine.router.modes
+    engine.set_mode("draw", True)
+    engine._follow["draw"]["since"] -= 10  # never appeared within 5 s → off
+    engine.watchdog()
+    assert "draw" not in engine.router.modes
+
+
+def test_new_keys_land_inside_their_table_not_after_comments():
+    cfg = Config()
+    cfg.data["modes"]["air_mouse"]["follow_app"] = "(?i)^krita$"
+    cfg.save()
+    text = cfg.path.read_text()
+    block = text[text.index("[modes.air_mouse]"):]
+    assert block.index("follow_app") < block.index("# ── Default profile")
+    import tomllib
+    data = tomllib.loads(text)["modes"]["air_mouse"]
+    assert data["follow_app"] == "(?i)^krita$" and all("follow_app" not in h for h in data.get("on_enter", []))
+
+
+# ── Handedness ────────────────────────────────────────────────────────────────
+
+def sides(frames, preferred="left"):
+    from types import SimpleNamespace as NS
+    from orion.handedness import Handedness
+    hd = Handedness(NS(general={"preferred_hand": preferred}))
+    return [tuple(h.side for h in hd(f).hands) for f in frames]
+
+
+def lone(raw, seconds, x=0, t0=0.0, hid=5):
+    return [Frame(t=t0 + i / 100, hands=(make_hand(raw, palm=(x, 200, 0), hid=hid),)) for i in range(int(seconds * 100))]
+
+
+def test_left_hand_misread_as_right_on_entry_stays_left():
+    out = sides(lone("right", 0.3) + lone("left", 1, t0=0.3))
+    assert set(out) == {("left",)}
+
+
+def test_lone_right_hand_settles_and_sticks():
+    out = sides(lone("right", 1) + lone("left", 1, t0=1))
+    assert out[0] == ("left",) and out[60] == ("right",) and out[-1] == ("right",)
+    assert sides(lone("right", 0.3, x=120))[25] == ("right",)  # came in from the right: half the wait
+
+
+def test_second_hand_takes_the_other_side():
+    a = make_hand("left", palm=(-80, 200, 0), hid=1)
+    frames = [Frame(t=i / 100, hands=(a, make_hand("left", palm=(80, 200, 0), hid=2))) for i in range(100)]
+    assert set(sides(frames)) == {("left", "right")}
+
+
+def test_pointer_curve_still_then_linear_then_exponential():
+    from orion.actions.uinput import pointer_gain
+    px = lambda s: s * pointer_gain(s, 4.0, 0.15, 0.1)  # noqa: E731  px per frame at speed s
+    assert px(0.02) < 0.01                      # a resting hand's jitter is sub-pixel
+    assert px(0.5) > 20 * px(0.02)
+    assert pointer_gain(5, 4, 0.15, 0.1) > 1.5 * pointer_gain(1, 4, 0.15, 0.1)  # faster hand → higher gain
+    assert pointer_gain(500, 4, 0.15, 0.1) < 4 * 21  # capped
+
+
+def _desktop_run(g, xs, t0=0, y=300):
+    return [e.value[0] for i, x in enumerate(xs)
+            for e in g.update(Frame(t=t0 + i / 115, hands=(make_hand(palm=(x, y, 0)),)))]
+
+
+def _desktop():  # 400 mm wide view, x spans -200…200 mm, raw filter so the hand position passes through
+    return REGISTRY["desktop_pointer"]({"steady": 5.0, "responsive": 0.2, "fine": 0.25, "view_width": 400,
+                                        "coverage": 1.0, "edge": 25, "fine_speed": 60, "reach": 30})
+
+
+def test_desktop_pointer_slow_motion_is_scaled_down():
+    g = _desktop()
+    u0 = _desktop_run(g, [0] * 3)[-1]
+    slow = _desktop_run(g, [0.2 * i for i in range(1, 41)], 1)[-1]  # 8 mm at ~23 mm/s
+    assert 0 < slow - u0 < 0.6 * 8 / 400  # cursor moved well under the hand's 8 mm
+
+
+def test_desktop_pointer_fast_sweep_clears_the_offset_and_edges_always_reach():
+    g = _desktop()
+    _desktop_run(g, [0] * 3)
+    _desktop_run(g, [0.2 * i for i in range(1, 41)], 1)  # build a fine-mode offset
+    _desktop_run(g, [8 + 20 * i for i in range(1, 6)] + [108] * 40, 2)  # fast sweep, then rest
+    assert _desktop_run(g, [108], 3)[-1] == pytest.approx((108 + 200) / 400, abs=0.02)  # 1:1 again
+    g = _desktop()
+    _desktop_run(g, [0] * 3)
+    _desktop_run(g, [0.2 * i for i in range(1, 41)], 1)
+    right = _desktop_run(g, [8 + 0.5 * i for i in range(1, 400)], 2)[-1]  # slow walk all the way to the limit
+    assert right == pytest.approx(1.0, abs=0.001)
+
+
+def test_pointer_damps_palm_wobble_while_a_finger_moves():
+    def moved(flex):  # a 6 mm palm dip over 8 frames, with or without the index curling at the same time
+        g = REGISTRY["pointer"]({"steady": 5.0, "responsive": 0.2})
+        ys, tot = [200] * 4 + [200 - 0.75 * i for i in range(1, 9)], 0.0
+        for i, y in enumerate(ys):
+            ext = set(FINGERS) - {"index"} if flex and i >= 4 else set(FINGERS)
+            tot += sum(abs(e.value[1]) for e in g.update(Frame(t=i / 100, hands=(make_hand(palm=(0, y, 0), extended=ext),)))
+                       if e.phase == "update")
+        return tot
+    assert moved(True) < 0.6 * moved(False)
+
+
+def test_desktop_pointer_rest_latch_ignores_tremor():
+    g = REGISTRY["desktop_pointer"]({"steady": 5.0, "responsive": 0.2, "rest": 0.5, "view_width": 400})
+    u0 = _desktop_run(g, [0] * 3)[-1]
+    assert _desktop_run(g, [0.2, -0.2, 0.3, -0.3, 0.2], 1)[-1] == pytest.approx(u0)
+
+
+def test_tap_damping_never_applies_to_a_moving_hand():
+    def damped(ys, flex_at=None):  # did the cursor lag the hand at the end?
+        g = REGISTRY["pointer"]({"steady": 5.0, "responsive": 0.2})
+        out = 0.0
+        for i, y in enumerate(ys):
+            ext = set(FINGERS) - {"index"} if flex_at is not None and i >= flex_at else set(FINGERS)
+            out += sum(e.value[1] for e in g.update(Frame(t=i / 115, hands=(make_hand(palm=(0, y, 0), extended=ext),)))
+                       if e.phase == "update")
+        return out
+    sweep = [200 - 4 * i for i in range(60)]  # 460 mm/s: moving hand, finger flex must not damp it
+    assert damped(sweep, flex_at=30) == pytest.approx(damped(sweep), rel=0.02)
