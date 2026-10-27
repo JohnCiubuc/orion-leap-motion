@@ -15,6 +15,7 @@ from orion.frame import Frame, from_dict, pack_skeleton, to_dict  # noqa: E402
 from orion.gestures import REGISTRY, GestureEvent, load_builtins  # noqa: E402
 from orion.gestures.fingers import FingerMotion  # noqa: E402
 from orion.gestures.paths import PathGesture, _resample  # noqa: E402
+from orion.gestures.precision import PrecisionLock  # noqa: E402
 from orion.router import Router  # noqa: E402
 from orion.sim import make_hand  # noqa: E402
 from orion.frame import FINGERS  # noqa: E402
@@ -695,3 +696,95 @@ def test_finger_motion_ignores_a_moving_palm():
 def test_finger_motion_ignores_small_noise():
     f = FingerMotion(); rng = np.random.default_rng(0)
     assert not any(f.update(i / 115, _tips(rng.normal(0, 0.3)), 3.0, 5, 60) for i in range(200))
+
+
+# ── Precision lock (desktop pointer cursor, mm in the view) ───────────────────
+
+LOCK = {"precision": 0.2, "dwell": 0.10, "enter_speed": 40, "exit_speed": 150, "radius": 25, "edge": 20,
+        "rest": 0.2, "glide": 0.12, "tap_hold": 0.30}
+LO, HI = np.array([-125.5, 150.0]), np.array([125.5, 351.0])
+STILL = 23  # frames: 0.2 s, past dwell, so the lock is in precision
+
+
+def _lock_run(lock, xs, speeds, t0=0.0, dt=1 / 115, taps=None, ys=250.0):  # `run` is taken by the gesture helper
+    n = len(xs)
+    speeds, ys, taps = np.broadcast_to(speeds, n), np.broadcast_to(ys, n), taps or [False] * n
+    return np.array([lock.step(t0 + i * dt, np.array([x, y], float), s, tp, LO, HI)
+                     for i, (x, y, s, tp) in enumerate(zip(xs, ys, speeds, taps))])
+
+
+def test_coarse_is_stateless():
+    hold = [40.0] * 230  # 2 s: the glide has fully decayed
+    a = _lock_run(PrecisionLock(LOCK), [0] * 5 + list(np.linspace(0, 40, 10)) + hold, 300)
+    b = _lock_run(PrecisionLock(LOCK), [-80, 60, 100, 20] + list(np.linspace(20, 40, 5)) + hold, 300)
+    assert a[-1, 0] == pytest.approx(40, abs=1e-9)
+    assert b[-1] == pytest.approx(a[-1], abs=1e-9)
+
+
+def test_precision_scales_slow_motion():
+    lock = PrecisionLock(LOCK)
+    c = _lock_run(lock, [0] * STILL + list(np.linspace(0, 10, 59)[1:]), [0] * STILL + [20] * 58)
+    assert lock.precise
+    assert c[-1, 0] - c[STILL - 1, 0] == pytest.approx(10 * LOCK["precision"], abs=0.5)
+
+
+def test_gain_reaches_one_at_radius():
+    lock = PrecisionLock(LOCK)
+    step = 20 / 115
+    c = _lock_run(lock, [0] * STILL + list(step * np.arange(1, 300)), [0] * STILL + [20] * 299)  # 52 mm of travel
+    assert lock.precise
+    assert c[-1, 0] - c[-2, 0] == pytest.approx(step, abs=1e-6)
+
+
+def test_fast_move_glides_to_the_hand():
+    lock = PrecisionLock(LOCK)
+    c = _lock_run(lock, [0] * STILL + list(np.linspace(0, 10, 59)[1:]), [0] * STILL + [20] * 58)
+    offset = abs(c[-1, 0] - 10)  # cursor lags the hand after the scaled move
+    n = math.ceil((LOCK["glide"] + 0.05) * 115)
+    g = _lock_run(lock, [10.0] * n, 300, t0=(STILL + 58) / 115)  # filter reports a fast move
+    assert not lock.precise
+    assert abs(g[-1, 0] - 10) < 0.05 * offset
+    assert np.abs(np.diff(np.vstack([c[-1:], g]), axis=0)).max() <= offset  # no snap
+
+
+def test_edge_walk_always_reaches_the_limit():
+    lock = PrecisionLock(LOCK)
+    _lock_run(lock, [0] * STILL, 0)
+    assert lock.precise
+    walk = list(np.minimum(20 / 115 * np.arange(1, 800), HI[0]))  # walks onto the limit, then rests there
+    c = _lock_run(lock, walk, 20, t0=STILL / 115)
+    assert c[-1, 0] == HI[0]
+
+
+def test_rest_latch_ignores_tremor():
+    lock = PrecisionLock(LOCK)
+    c0 = _lock_run(lock, [0] * STILL, 0)[-1]
+    noise = np.random.default_rng(0).uniform(-0.1, 0.1, 100)
+    c = _lock_run(lock, list(noise), 5, t0=STILL / 115)
+    assert lock.precise
+    assert np.abs(c - c0).max() < 1e-9
+
+
+def test_tap_rewinds_and_holds():
+    lock = PrecisionLock(LOCK)
+    c_pre = _lock_run(lock, [0] * STILL, 0)[-1]
+    dip = 250 - 0.625 * np.arange(1, 9)  # palm dips 5 mm over 8 frames
+    hold = math.ceil(LOCK["tap_hold"] * 115)
+    ys = list(dip) + [dip[-1]] * hold
+    c = _lock_run(lock, [0] * len(ys), [70] * 8 + [0] * hold, t0=STILL / 115,
+                  taps=[False] * 3 + [True] * 5 + [False] * hold, ys=ys)
+    assert c[3] == pytest.approx(c_pre, abs=1e-6)  # rewound to before the dip
+    held = c[3:3 + hold - 1]  # until tap_hold after the tap
+    assert np.abs(held - c_pre).max() < 0.5
+    assert lock.precise
+    t0 = (STILL + len(ys)) / 115
+    f = _lock_run(lock, list(20 / 115 * np.arange(1, 31)), 20, t0=t0, ys=dip[-1])  # follows again, scaled
+    assert 0.15 < (f[-1, 0] - c[-1, 0]) / (20 / 115 * 30) < 0.35
+
+
+def test_duplicate_timestamps_do_not_blow_up():
+    lock = PrecisionLock(LOCK)
+    p = np.array([0.0, 250.0])
+    a = lock.step(1.0, p, 0.0, False, LO, HI)
+    b = lock.step(1.0, p + 1, 500.0, False, LO, HI)
+    assert np.all(np.isfinite(a)) and np.all(np.isfinite(b))
