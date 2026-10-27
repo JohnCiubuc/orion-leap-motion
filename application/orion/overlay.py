@@ -33,7 +33,7 @@ def title(name: str) -> str:
 class OverlayHost:
     def __init__(self, engine):
         self.engine, self.proc, self.cfg = engine, None, {}
-        self.status, self.lock = "off", threading.Lock()
+        self.status, self.lock, self.ringing = "off", threading.Lock(), False
         engine.listeners.append(self.on_engine)
         engine.overlay = self
 
@@ -47,7 +47,9 @@ class OverlayHost:
             return
         if self.proc is None or self.proc.poll() is not None:
             self.start()
-        self.send({"type": "config", **{k: cfg[k] for k in ("opacity", "seconds", "corner", "margin") if k in cfg}})
+        self.send({"type": "config", **{k: cfg[k] for k in ("opacity", "seconds", "corner", "margin", "precision_ring") if k in cfg}})
+        if self.ringing:  # a setting flip while the ring is up hides or restores it
+            self.send({"type": "ring", "on": bool(cfg.get("precision_ring", True))})
 
     def start(self):
         if not os.environ.get("WAYLAND_DISPLAY"):
@@ -85,6 +87,11 @@ class OverlayHost:
                 self.proc.stdin.flush()
             except (BrokenPipeError, ValueError):
                 self.proc = None
+
+    def ring(self, on: bool):
+        self.ringing = on
+        if self.cfg.get("precision_ring", True):
+            self.send({"type": "ring", "on": on})
 
     # ── Engine events → cards ─────────────────────────────────────────────────
 

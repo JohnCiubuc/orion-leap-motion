@@ -43,6 +43,10 @@
       <Switch bind:checked={o.enabled} label="Show overlay" />
     </div>
     <div class="row" class:dim={!o.enabled}>
+      <div><h3>Precision ring</h3><p class="muted">A ring around the cursor while the pointer is in precision mode.</p></div>
+      <Switch bind:checked={o.precision_ring} label="Precision ring" />
+    </div>
+    <div class="row" class:dim={!o.enabled}>
       <div><h3>Opacity</h3></div>
       <label class="num"><input type="range" min="0.2" max="1" step="0.05" bind:value={o.opacity} /> {Math.round(o.opacity * 100)} %</label>
     </div>

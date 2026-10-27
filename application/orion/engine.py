@@ -62,6 +62,7 @@ class Engine:
         self.handedness = Handedness(config)
         self.feed = deque(maxlen=50)  # recent gesture events for the UI
         self.source = self.overlay = None
+        self._ring = False  # precision ring last signalled to the overlay
         self.lock = threading.Lock()
         self.last_frame = self.last_restart = time.monotonic()
         self._restarting = threading.Lock()
@@ -128,6 +129,14 @@ class Engine:
                 if ev.name == "path.recorded":
                     self.emit_state()
         self.emit("frame", frame)
+        self._sync_ring()
+
+    def _sync_ring(self):
+        on = any(g.precise for g in self.gestures if g.name == "desktop_pointer")
+        if on != self._ring:
+            self._ring = on
+            if self.overlay:
+                self.overlay.ring(on)
 
     def on_window(self, cls: str, title: str):
         if cls == "orion-renewal":  # focusing the panel itself keeps the previous app's profile

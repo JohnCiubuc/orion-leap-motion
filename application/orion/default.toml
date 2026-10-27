@@ -18,6 +18,7 @@ seconds = 1.6            # how long each card stays
 corner = "top-right"     # top-right | top-left | bottom-right | bottom-left
 margin = 16              # px from the screen edges (bars like Waybar are already accounted for)
 show_unbound = false     # also show gestures that have no binding
+precision_ring = true    # ring around the cursor while the desktop pointer is in precision mode
 
 # Per-gesture tuning: [gestures.<name>] enabled = false / <param> = value
 [gestures.swipe]

@@ -825,3 +825,51 @@ def test_tap_hold_lasts_until_tap_hold_after_the_finger_stops():
     assert np.abs(c[:tap_n + hold_n] - c_pre).max() < 1e-6  # held through the long tap and tap_hold after it
     ratio = (c[-1, 0] - c[tap_n + hold_n - 1, 0]) / (0.1 * 30)
     assert lock.precise and 0.15 < ratio < 0.6  # then follows again, scaled
+
+
+# ── Precision ring signalling ─────────────────────────────────────────────────
+
+class _FakeOverlay:
+    def __init__(self):
+        self.rings = []
+
+    def ring(self, on):
+        self.rings.append(on)
+
+
+def _ring_engine():
+    from orion.engine import Engine
+    e = Engine(Config(), demo=True)
+    e.overlay = _FakeOverlay()
+    return e
+
+
+def _ring_frames(e, pts, t0=0.0):
+    for i, x in enumerate(pts):
+        e.on_frame(Frame(t=t0 + i / 115, hands=(make_hand(palm=(x, 220, 0)),)))
+
+
+def test_engine_signals_ring_only_on_change():
+    e = _ring_engine()
+    _ring_frames(e, [-60] * 35)  # still → precision
+    _ring_frames(e, [-60 + 4 * i for i in range(1, 30)], 1)  # sweep
+    assert e.overlay.rings == [True, False]
+
+
+def test_overlay_host_ring_respects_the_setting():
+    from orion.overlay import OverlayHost
+    sent = []
+    host = OverlayHost(_ring_engine())
+    host.send = sent.append
+    host.cfg = {"precision_ring": False}
+    host.ring(True)
+    assert sent == []
+    host.cfg = {"precision_ring": True}
+    host.ring(True)
+    assert sent == [{"type": "ring", "on": True}]
+
+
+def test_ring_without_overlay_is_a_noop():
+    e = _ring_engine()
+    e.overlay = None
+    _ring_frames(e, [-60] * 35)
