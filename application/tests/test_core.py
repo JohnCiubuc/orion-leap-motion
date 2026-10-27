@@ -873,3 +873,16 @@ def test_ring_without_overlay_is_a_noop():
     e = _ring_engine()
     e.overlay = None
     _ring_frames(e, [-60] * 35)
+
+
+def test_pointer_replay_metrics_on_a_synthetic_recording():
+    import importlib.util  # scripts/ isn't a package: load the tool by path
+    spec = importlib.util.spec_from_file_location("pointer_replay", os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "pointer_replay.py"))
+    tool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+    rest = [Frame(t=i / 100, hands=(make_hand(palm=(0, 250, 0)),)) for i in range(100)]
+    sweep = [Frame(t=1 + i / 100, hands=(make_hand(palm=(-2.5 * i, 250, 0)),)) for i in range(60)]
+    m = tool.metrics(rest + sweep)
+    assert m["rest_jitter_px"] < 1
+    assert m["reached_edges"]["left"] is True
+    assert 0 < m["max_jump_px"] < float("inf")
