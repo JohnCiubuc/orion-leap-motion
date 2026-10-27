@@ -788,3 +788,15 @@ def test_duplicate_timestamps_do_not_blow_up():
     a = lock.step(1.0, p, 0.0, False, LO, HI)
     b = lock.step(1.0, p + 1, 500.0, False, LO, HI)
     assert np.all(np.isfinite(a)) and np.all(np.isfinite(b))
+
+
+def test_tap_hold_lasts_until_tap_hold_after_the_finger_stops():
+    lock = PrecisionLock(LOCK)
+    c_pre = _lock_run(lock, [0] * STILL, 0)[-1]
+    tap_n, hold_n = 52, math.ceil(LOCK["tap_hold"] * 115) - 1  # tap level True for 0.45 s, then held 0.3 s more
+    n = tap_n + hold_n + 30
+    xs = list(0.1 * np.arange(1, n + 1))  # palm drifts slowly the whole time
+    c = _lock_run(lock, xs, 11.5, t0=STILL / 115, taps=[True] * tap_n + [False] * (n - tap_n))
+    assert np.abs(c[:tap_n + hold_n] - c_pre).max() < 1e-6  # held through the long tap and tap_hold after it
+    ratio = (c[-1, 0] - c[tap_n + hold_n - 1, 0]) / (0.1 * 30)
+    assert lock.precise and 0.15 < ratio < 0.6  # then follows again, scaled

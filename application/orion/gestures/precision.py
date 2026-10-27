@@ -38,9 +38,10 @@ class PrecisionLock:
         if tap and not self.tapping:  # the palm dipped with the finger: undo it, then hold still
             old = [c for tt, c in self.hist if tt <= t - 0.15]
             self.c = (old[-1] if old else self.hist[0][1] if self.hist else self.c).copy()
-            self.hold_until = t + cfg["tap_hold"]
             if not self.precise:
                 self._enter(p)
+        if tap:  # tap is a level signal: hold until tap_hold after the finger stops
+            self.hold_until = t + cfg["tap_hold"]
         self.tapping = tap
 
         if self.precise:
