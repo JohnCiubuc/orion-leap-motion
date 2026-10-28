@@ -7,6 +7,7 @@ layer-shell library. Reads JSON lines on stdin:
      "precision_ring": true}
     {"type": "show", "title": "Swipe left", "detail": "hypr.dispatch", "hand": "right", "key": "…"}
     {"type": "ring", "on": true}     # precision ring around the cursor (needs config precision_ring)
+    {"type": "menu", "op": "open", "labels": ["1", "2"]}   # OrionDo pie; also op update | fire | close
 
 It is a wlr-layer-shell surface, not a window: Hyprland never tiles, focuses or lists it,
 it takes no keyboard focus and clicks pass straight through it.
@@ -26,6 +27,8 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 gi.require_version("Gtk4LayerShell", "1.0")
 from gi.repository import Gdk, GLib, Gtk, Gtk4LayerShell as LS  # noqa: E402
+
+from overlay_menu import MenuWindow  # noqa: E402  (this file runs as a script, so its directory is on the path)
 
 CSS = """
 window { background: transparent; }
@@ -101,6 +104,7 @@ class Overlay:
         LS.set_keyboard_mode(self.win, LS.KeyboardMode.NONE)  # never steals focus
         self.win.connect("map", self._click_through)
         self._init_ring(app)
+        self.menu = MenuWindow(app, self._place_on_focused, self._click_through)
 
         self.bar, self.title, self.detail = Gtk.Box(), Gtk.Label(xalign=0), Gtk.Label(xalign=0)
         self.title.add_css_class("title")
@@ -131,6 +135,10 @@ class Overlay:
         except Exception:
             return False
 
+    def _place_on_focused(self, win):
+        LS.set_monitor(win, gdk_monitor(focused_connector()))  # None (no Hyprland IPC): the compositor picks
+        return True
+
     def apply_config(self):
         for edge in LS.Edge.TOP, LS.Edge.BOTTOM, LS.Edge.LEFT, LS.Edge.RIGHT:
             LS.set_anchor(self.win, edge, False)
@@ -149,6 +157,8 @@ class Overlay:
             self.show(msg)
         elif msg.get("type") == "ring":
             self.set_ring(bool(msg.get("on")))
+        elif msg.get("type") == "menu":
+            self.menu.handle(msg)
 
     def show(self, msg):
         key = msg.get("key")

@@ -99,6 +99,32 @@ layerrule = ignorezero, orion-overlay
 layerrule = animation slide, orion-overlay
 ```
 
+## OrionDo radial menu
+
+Make the **peace sign** and a pie menu blooms in the middle of the focused monitor. Your index
+fingertip steers a marker inside it (the mouse cursor is not touched): move a few millimetres
+toward a slice to hover it, then **pull** further out to fire it. Firing is always by movement,
+never by a tap. A fingertip **tap at the centre** closes the menu without firing, and so does
+losing the hand for 1.5 s. It needs the overlay (above) and stays out of the way while Orion is
+paused or an exclusive mode (air mouse, desktop mouse) is on.
+
+Items live in the config, listed clockwise from the top and always spaced equally, so reordering
+the list moves them. Each is a label plus any action, exactly like a binding:
+
+```toml
+[gestures.oriondo]
+trigger = "peace"     # any pose
+deadzone = 8          # mm from the centre before a slice is hovered
+pull = 35             # mm to pull out to fire it
+
+[[gestures.oriondo.items]]
+label = "1"
+action = "input.keys"
+args = { combo = "1" }
+```
+
+The pie's layer namespace is `orion-menu`.
+
 ## When the controller falls asleep
 
 Orion counts the controller as asleep when it's connected but sends no frames. The sidebar
