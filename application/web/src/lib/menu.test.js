@@ -116,3 +116,10 @@ test("fitLabel shortens to the slice size", () => {
   assert.equal(fitLabel("Mute", 4), "Mute");
   assert.equal(fitLabel("", 4), "·");
 });
+
+test("labels that are not strings (a hand-edited label = 1) do not crash", () => {
+  assert.equal(fitLabel(1, 4), "1");
+  assert.equal(fitLabel(null, 4), "·");
+  assert.equal(fitLabel(undefined, 12), "·");
+  assert.equal(blankItem([{ label: 1 }, { label: 2 }], []).label, "3");
+});

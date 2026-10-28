@@ -53,9 +53,10 @@
   const defaults = (name) => structuredClone($state.snapshot(orion.gestureDefaults[name] ?? {}));
   const reset = (name) => (orion.draft.gestures[name] = defaults(name));
   const modified = (name) => JSON.stringify(orion.draft?.gestures?.[name] ?? {}) !== JSON.stringify(orion.gestureDefaults[name] ?? {});
+  const listed = (g) => FAMILIES.some(([fam]) => fam === g.family); // OrionDo has its own page, and its menu is not a "setting"
   const resetAll = () => {
     if (!confirm("Reset every gesture to its default settings? Takes effect when you save.")) return;
-    for (const g of orion.gestures) if (modified(g.name)) reset(g.name);
+    for (const g of orion.gestures) if (listed(g) && modified(g.name)) reset(g.name);
   };
   const value = (g, k) => orion.draft?.gestures?.[g.name]?.[k] ?? g.params[k][0];
   const step = ([d, lo, hi]) => (Number.isInteger(d) && Number.isInteger(hi) && hi - lo >= 10 ? 1 : (hi - lo) / 100);
@@ -64,7 +65,7 @@
 <header>
   <h1>Gestures</h1>
   <p class="muted">{orion.gestures.length} gestures loaded. Changes apply when you save.</p>
-  <button class="ghost reset-all" onclick={resetAll} disabled={!orion.gestures.some((g) => modified(g.name))}>
+  <button class="ghost reset-all" onclick={resetAll} disabled={!orion.gestures.some((g) => listed(g) && modified(g.name))}>
     <RotateCcw size={14} /> Reset all to defaults
   </button>
 </header>

@@ -58,7 +58,7 @@ export function moveItem(items, path, from, to) {
 }
 
 export function blankItem(items, path) {
-  const used = new Set((listAt(items, path) ?? []).map((i) => i.label));
+  const used = new Set((listAt(items, path) ?? []).map((i) => String(i.label)));
   let n = 1;
   while (used.has(String(n))) n++;
   return { label: String(n), action: "input.keys", args: {} };
@@ -84,7 +84,7 @@ export function selectionAfterRemove(sel, index, count) {
 
 export function fitLabel(label, n) {
   const max = n <= 4 ? 10 : n <= 8 ? 6 : 4;
-  const chars = [...label];
+  const chars = [...String(label ?? "")]; // a hand-edited `label = 1` is a number
   if (!chars.length) return "·";
-  return chars.length > max ? chars.slice(0, max - 1).join("") + "…" : label;
+  return chars.length > max ? chars.slice(0, max - 1).join("") + "…" : chars.join("");
 }
