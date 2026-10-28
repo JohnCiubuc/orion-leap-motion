@@ -1,9 +1,10 @@
 <script>
   // App shell: navigation rail, global status, unsaved-changes bar, active view.
-  import { Activity, Hand, Cable, AppWindow, Puzzle, Disc, Settings, Pause, Play, RotateCcw } from "@lucide/svelte";
+  import { Activity, Hand, Orbit, Cable, AppWindow, Puzzle, Disc, Settings, Pause, Play, RotateCcw } from "@lucide/svelte";
   import { orion, send, dirty, saveDraft, discardDraft } from "./lib/link.svelte.js";
   import Dashboard from "./views/Dashboard.svelte";
   import Gestures from "./views/Gestures.svelte";
+  import OrionDo from "./views/OrionDo.svelte";
   import Bindings from "./views/Bindings.svelte";
   import Profiles from "./views/Profiles.svelte";
   import Plugins from "./views/Plugins.svelte";
@@ -13,6 +14,7 @@
   const VIEWS = [
     { id: "live", label: "Live", icon: Activity, view: Dashboard },
     { id: "gestures", label: "Gestures", icon: Hand, view: Gestures },
+    { id: "oriondo", label: "OrionDo", icon: Orbit, view: OrionDo },
     { id: "bindings", label: "Bindings", icon: Cable, view: Bindings },
     { id: "profiles", label: "Profiles", icon: AppWindow, view: Profiles },
     { id: "plugins", label: "Plugins", icon: Puzzle, view: Plugins },
