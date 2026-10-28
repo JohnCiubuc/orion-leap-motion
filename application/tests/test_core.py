@@ -1163,3 +1163,100 @@ def test_reload_closes_an_open_menu(monkeypatch):
     assert _op_names(e) == ["open", "close"]
     e.reload_config()  # nothing open any more: no second close
     assert _op_names(e) == ["open", "close"]
+
+
+# ── OrionDo: menu animation model ────────────────────────────────────────────
+
+def _anim(n=4, settled=True):
+    from orion.menu_anim import MenuAnim
+    a = MenuAnim()
+    a.open([str(i + 1) for i in range(n)], 0.0)
+    if settled:
+        a.step(0.5)
+    return a
+
+
+def test_easing_endpoints_and_overshoot():
+    from orion.menu_anim import ease_out_back, ease_out_cubic
+    for f in (ease_out_back, ease_out_cubic):
+        assert f(-1) == pytest.approx(0, abs=1e-9) and f(0) == pytest.approx(0, abs=1e-9) and f(1) == pytest.approx(1) and f(2) == pytest.approx(1)
+    assert max(ease_out_back(i / 100) for i in range(101)) > 1.0
+
+
+def test_anim_hidden_before_open():
+    from orion.menu_anim import MenuAnim
+    assert MenuAnim().step(0.0).visible is False
+
+
+def test_anim_open_blooms_staggered_with_overshoot():
+    a = _anim(settled=False)
+    v = a.step(0.0)
+    assert v.visible and [s.scale for s in v.slices] == [0, 0, 0, 0]
+    v = a.step(0.05)
+    assert v.slices[0].scale > v.slices[3].scale == 0
+    peak = max(a.step(0.05 + i / 100).slices[0].scale for i in range(1, 40))
+    assert peak > 1.0
+    assert [s.scale for s in a.step(1.0).slices] == pytest.approx([1.0] * 4)
+
+
+def test_anim_hover_lifts_only_the_hovered_slice():
+    a = _anim()
+    a.update(0, 0.3, 0, 0.4, 0.5)
+    v = a.step(0.8)
+    assert v.slices[0].lift > 0.9 and [s.lift for s in v.slices[1:]] == [0, 0, 0] and v.hover == 0
+    a.update(0, -0.3, 2, 0.4, 0.8)
+    v = a.step(1.2)
+    assert v.slices[0].lift < 0.05 and v.slices[2].lift > 0.9
+
+
+def test_anim_pull_stretches_and_fills_the_arc():
+    a = _anim()
+    a.update(0, 0.8, 0, 0.8, 0.5)
+    v = a.step(1.0)
+    assert v.slices[0].stretch == pytest.approx(0.8, abs=0.01) and v.arc == pytest.approx(0.8, abs=0.01)
+    a.update(0, 0, None, 0, 1.0)
+    v = a.step(1.5)
+    assert v.arc < 0.01 and v.hover is None and v.slices[0].stretch < 0.01
+
+
+def test_anim_marker_smooths_toward_the_target():
+    a = _anim()
+    a.update(1.0, 0.0, None, 0.0, 0.5)
+    assert 0 < a.step(0.51).marker[0] < 1
+    assert a.step(1.0).marker == pytest.approx((1.0, 0.0), abs=0.01)
+    assert a.step(1.0).marker == a.step(1.0).marker  # same instant, same view
+
+
+def test_anim_fire_flashes_then_collapses_and_hides():
+    a = _anim()
+    a.fire(1, 1.0)
+    flashes = [a.step(1.0 + i / 100).slices for i in range(15)]
+    assert max(s[1].flash for s in flashes) > 0.8 and all(s[0].flash == 0 for s in flashes)
+    assert a.step(1.5).visible is False
+
+
+def test_anim_close_after_fire_does_not_cut_the_flash():
+    a = _anim()
+    a.fire(1, 1.0)
+    a.close(1.01)  # the engine sends fire and close back to back
+    assert a.step(1.05).slices[1].flash > 0.5 and a.step(1.05).visible
+    assert a.step(1.5).visible is False
+
+
+def test_anim_close_shrinks_and_hides_then_reopens_from_zero():
+    a = _anim()
+    a.close(1.0)
+    assert all(s.scale < 1 for s in a.step(1.1).slices)
+    assert a.step(1.3).visible is False
+    a.open(["a", "b"], 2.0)
+    v = a.step(2.0)
+    assert v.visible and [s.scale for s in v.slices] == [0, 0]
+
+
+def test_anim_reopen_during_close_restarts_the_bloom():
+    a = _anim()
+    a.close(1.0)
+    a.open(["1", "2", "3", "4"], 1.05)
+    v = a.step(1.05)
+    assert v.visible and [s.scale for s in v.slices] == [0, 0, 0, 0]
+    assert [s.scale for s in a.step(1.6).slices] == pytest.approx([1.0] * 4)
