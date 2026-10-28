@@ -84,6 +84,17 @@ Equal spacing is guaranteed because position comes only from list order. A subme
 an item, which is why the menu is a tree from the start. Launching an app or macro later is just a different
 `action`. `Config` already round-trips nested arrays of tables.
 
+### Future UI editing (design constraint, UI itself out of scope)
+
+The Orion web UI will later edit the items. The design keeps that cheap:
+
+- Items are plain data (`label`, `action`, `args`), the same shape as a binding, so the existing `ArgsEditor`
+  and the action metadata already in `engine.state()` (names, default args, `choices`) can drive an item editor.
+- A UI save goes through `reload_config`, which rebuilds the gestures, so an edited menu applies live.
+- List order *is* position, so an editor must preserve and reorder the array. Nothing may depend on an item id
+  or on the array being sorted by anything else.
+- No item data is cached outside the config (the gesture re-reads `items` on every rebuild).
+
 ## Overlay and animation
 
 A full-monitor transparent layer-shell surface on the focused monitor, click-through (empty input region), same
