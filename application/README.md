@@ -123,6 +123,8 @@ action = "input.keys"
 args = { combo = "1" }
 ```
 
+You can also edit the items (and tune the menu) on the **OrionDo** page of the Orion window.
+
 The pie's layer namespace is `orion-menu`.
 
 ## When the controller falls asleep
