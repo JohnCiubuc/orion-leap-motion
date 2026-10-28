@@ -97,7 +97,8 @@ class OverlayHost:
 
     @property
     def ready(self) -> bool:
-        return self.proc is not None and self.proc.poll() is None and self.cfg.get("enabled", True)
+        proc = self.proc  # send() may clear it from another thread
+        return proc is not None and proc.poll() is None and self.cfg.get("enabled", True)
 
     def menu(self, msg: dict):
         """OrionDo pie: marker updates are thinned to ~60 Hz (tracking is faster); everything else goes through."""

@@ -31,7 +31,10 @@ All geometry is in millimetres of fingertip travel; the overlay maps it to pixel
 5. **Center tap.** A fingertip tap (existing `FingerMotion`, index tip relative to palm) while `r < deadzone`
    closes the menu without firing. A tap dips the tip ~5–10 mm, well under `pull`, so a tap can never fire an
    item and the marker needs no freezing.
-6. **Hand lost** for more than `lost` seconds closes the menu.
+6. **Hand lost** for more than `lost` seconds closes the menu. A hand that returns after more than 0.15 s out of view
+   restarts the marker at the centre from wherever it reappears (measured from the old origin it could fire at once).
+   The menu also closes at once, without firing, if it stops being allowed while open (paused, an exclusive mode
+   turned on, or the overlay gone).
 7. **Re-arm.** After any close, the trigger pose must end and `cooldown` seconds pass before it can open again.
 
 The opening hand's side is the one tracked until close.

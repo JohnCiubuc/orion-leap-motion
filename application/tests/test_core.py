@@ -968,16 +968,36 @@ def test_oriondo_tap_dip_never_fires_or_closes_at_the_rim():
     assert key_events(evs) == []
 
 
-def test_oriondo_brief_loss_keeps_origin_then_times_out():
+def test_oriondo_brief_loss_keeps_the_menu_then_times_out():
     g = menu()
     t = opened(g)
     _, t = feed(g, t, index_hand(0, 200), 10)
     evs, t = feed(g, t, None, 100)  # 1.0 s without the hand
     assert key_events(evs) == []
-    evs, t2 = feed(g, t, index_hand(12, 200), 2)
+    evs, t2 = feed(g, t, index_hand(30, 200), 2)  # back elsewhere: the marker restarts at the centre
+    assert key_events(evs) == [] and last(evs)["hover"] is None
+    evs, t2 = feed(g, t2, index_hand(42, 200), 2)  # …and steers from there
     assert key_events(evs) == [] and last(evs)["hover"] == 1
     evs, _ = feed(g, t2, None, 160)
     assert key_events(evs) == [("end", "lost")]
+
+
+def test_oriondo_hand_returning_far_away_does_not_fire():
+    g = menu()
+    t = opened(g)
+    _, t = feed(g, t, index_hand(0, 200), 10)
+    _, t = feed(g, t, None, 50)  # the hand left the view…
+    evs, _ = feed(g, t, index_hand(0, 280), 5)  # …and came back 80 mm up, past the pull distance
+    assert key_events(evs) == []
+
+
+def test_oriondo_closes_when_it_is_no_longer_allowed():
+    g = menu()
+    t = opened(g)
+    g.allow = lambda: False  # paused, an exclusive mode, or the overlay went away
+    evs, t = feed(g, t, index_hand(0, 200), 1)
+    assert key_events(evs) == [("end", "blocked")]
+    assert key_events(feed(g, t, polar(0, 36), 3)[0]) == []
 
 
 def test_oriondo_second_hand_ignored_while_open():
@@ -1260,3 +1280,20 @@ def test_anim_reopen_during_close_restarts_the_bloom():
     v = a.step(1.05)
     assert v.visible and [s.scale for s in v.slices] == [0, 0, 0, 0]
     assert [s.scale for s in a.step(1.6).slices] == pytest.approx([1.0] * 4)
+
+
+def test_engine_menu_closes_without_firing_when_the_overlay_goes_away(monkeypatch):
+    e = _menu_engine(monkeypatch)
+    _menu_frames(e, make_hand("left", extended={"index", "middle"}, palm=(0, 200, 0)), 60)
+    e.overlay.ready = False
+    _menu_frames(e, index_hand(0, 200, side="left"), 2, 0.6)
+    _menu_frames(e, index_hand(0, 240, side="left"), 3, 0.62)
+    assert _op_names(e) == ["open", "close"] and [r for r in e.ran if r[0] == "input.keys"] == []
+
+
+def test_engine_pausing_with_the_menu_open_blocks_the_item(monkeypatch):
+    e = _menu_engine(monkeypatch)
+    _menu_frames(e, make_hand("left", extended={"index", "middle"}, palm=(0, 200, 0)), 60)
+    e.router.paused = True
+    _menu_frames(e, index_hand(0, 240, side="left"), 3, 0.6)
+    assert _op_names(e) == ["open", "close"] and [r for r in e.ran if r[0] == "input.keys"] == []

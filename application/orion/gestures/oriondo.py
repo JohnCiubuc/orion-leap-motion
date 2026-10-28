@@ -8,6 +8,7 @@ from . import REGISTRY, Gesture, GestureEvent, poses, register  # noqa: F401  (p
 from .fingers import FingerMotion
 
 HYSTERESIS = 4.0  # degrees past a slice border before the hover switches
+REANCHOR = 0.15  # s without the hand: wherever it comes back becomes the new centre
 
 
 @register
@@ -50,13 +51,19 @@ class OrionDo(Gesture):
 
     def _steer(self, frame):
         m, p = self.menu, self.p
+        if not self.allow():  # paused, an exclusive mode, or no overlay to show the pie: never fire blind
+            yield self._close(frame, "blocked")
+            return
         h = frame.hand(m["side"])
         if h is None:
             if frame.t - m["seen"] > p["lost"]:
                 yield self._close(frame, "lost")
             return
+        tip = h["index"].tip[:2].astype(np.float64)
+        if frame.t - m["seen"] > REANCHOR:  # back from out of view: measured from where it left, it could fire at once
+            m.update(origin=tip, hover=None, tap=FingerMotion())
         m["seen"] = frame.t
-        v = h["index"].tip[:2].astype(np.float64) - m["origin"]
+        v = tip - m["origin"]
         r = float(np.hypot(*v))
         # the index only: dropping the trigger pose curls the other fingers, which must not read as a tap
         tapped = m["tap"].update(frame.t, np.array([h["index"].tip - h.palm]),
