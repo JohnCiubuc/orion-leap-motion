@@ -218,4 +218,4 @@ def continuous(name, /, *, hands=1, mode="ratio", doc="", **params):
 # ── Built-ins (importing registers them) ──────────────────────────────────────
 
 def load_builtins():
-    from . import joystick, motions, paths, poses, twohand  # noqa: F401
+    from . import joystick, motions, paths, poses, twohand, oriondo  # noqa: F401

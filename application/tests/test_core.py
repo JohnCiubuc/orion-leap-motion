@@ -858,3 +858,181 @@ def test_pointer_replay_metrics_on_a_synthetic_recording():
     gap = [Frame(t=2.6 + i / 100, hands=()) for i in range(30)]
     far = [Frame(t=2.9 + i / 100, hands=(make_hand(palm=(100, 250, 0)),)) for i in range(5)]
     assert tool.metrics(rest + sweep + gap + far)["max_jump_px"] == pytest.approx(m["max_jump_px"])  # hand-loss gap is not a jump
+
+
+# ── OrionDo ───────────────────────────────────────────────────────────────────
+
+def menu_items(n=4):
+    return [{"label": str(i + 1), "action": "input.keys", "args": {"combo": str(i + 1)}} for i in range(n)]
+
+
+def index_hand(x, y, dip=0.0, side="right"):
+    h = make_hand(side, palm=(x, y, 0), extended={"index"})
+    h["index"].joints[-1][1] -= dip  # a tap: the tip drops against the palm
+    return h
+
+
+def menu(n=4, **params):
+    return REGISTRY["oriondo"]({"items": menu_items(n) if isinstance(n, int) else n, **params})
+
+
+def feed(g, t, hand, n=1):
+    """n frames of `hand` (None = no hand) from time t at 100 fps → (events, next t)."""
+    return [e for i in range(n) for e in g.update(Frame(t=t + i / 100, hands=(hand,) if hand else ()))], t + n / 100
+
+
+PEACE = lambda: make_hand(extended={"index", "middle"}, palm=(0, 200, 0))  # noqa: E731
+
+
+def opened(g):
+    evs, t = feed(g, 0.0, PEACE(), 50)
+    assert [e.phase for e in evs if e.phase != "update"] == ["begin"]
+    return t
+
+
+def polar(deg, mm):  # index hand position `mm` from the origin, `deg` clockwise from the top
+    return index_hand(mm * math.sin(math.radians(deg)), 200 + mm * math.cos(math.radians(deg)))
+
+
+def last(evs):
+    return [e.value for e in evs if e.phase == "update"][-1]
+
+
+def key_events(evs):
+    return [(e.phase, e.value) for e in evs if e.phase != "update"]
+
+
+def test_oriondo_opens_on_trigger_pose():
+    evs, _ = feed(menu(), 0.0, PEACE(), 50)
+    assert key_events(evs) == [("begin", {"labels": ["1", "2", "3", "4"]})]
+    assert {e.name for e in evs} == {"oriondo"} and {e.hand for e in evs} == {"right"}
+
+
+@pytest.mark.parametrize("dx,dy,want", [(0, 12, 0), (12, 0, 1), (0, -12, 2), (-12, 0, 3)])
+def test_oriondo_hover_sector_per_direction(dx, dy, want):
+    g = menu()
+    t = opened(g)
+    assert last(feed(g, t, index_hand(0, 200), 3)[0])["hover"] is None  # the origin is the centre
+    v = last(feed(g, t + 0.03, index_hand(dx, 200 + dy), 3)[0])
+    assert v["hover"] == want and 0 < v["pull"] < 1
+
+
+@pytest.mark.parametrize("n,deg,want", [(3, 120, 1), (6, 60, 1)])
+def test_oriondo_sectors_for_other_counts(n, deg, want):
+    g = menu(n)
+    t = opened(g)
+    assert last(feed(g, t, polar(deg, 12), 3)[0])["hover"] == want
+
+
+def test_oriondo_hysteresis_at_border():
+    g = menu()
+    t = opened(g)
+    for deg, want in ((46, 1), (44, 1)):  # past the 45° border and back: stays
+        evs, t = feed(g, t, polar(deg, 12), 2)
+        assert last(evs)["hover"] == want
+    for deg, want in ((90, 1), (42, 1), (39, 0)):  # 4° of hysteresis, then it switches
+        evs, t = feed(g, t, polar(deg, 12), 2)
+        assert last(evs)["hover"] == want
+
+
+def test_oriondo_fires_only_at_pull():
+    g = menu()
+    t = opened(g)
+    assert key_events(feed(g, t, polar(0, 34), 3)[0]) == []
+    evs, _ = feed(g, t + 0.03, polar(0, 36), 1)  # float32 joints: 35.0 exactly is not reliable
+    assert [p for p, _ in key_events(evs)] == ["fire", "end"]
+    fire = key_events(evs)[0][1]
+    assert fire["index"] == 0 and fire["item"]["label"] == "1" and key_events(evs)[1][1] == "fired"
+
+
+def test_oriondo_fast_flick_fires_directional_item():
+    g = menu()
+    t = opened(g)
+    evs, _ = feed(g, t, polar(90, 40), 1)  # one dropped-frame jump straight from the centre
+    assert key_events(evs)[0][1]["index"] == 1
+
+
+def test_oriondo_center_tap_closes_without_firing():
+    g = menu()
+    t = opened(g)
+    _, t = feed(g, t, index_hand(0, 200), 30)
+    evs = [e for i in range(8) for e in feed(g, t + i / 100, index_hand(0, 200, dip=i * 1.5))[0]]
+    assert key_events(evs) == [("end", "tap")]
+
+
+def test_oriondo_tap_dip_never_fires_or_closes_at_the_rim():
+    g = menu()
+    t = opened(g)
+    _, t = feed(g, t, index_hand(12, 200), 30)
+    evs = [e for i in range(8) for e in feed(g, t + i / 100, index_hand(12, 200, dip=i * 1.5))[0]]
+    assert key_events(evs) == []
+
+
+def test_oriondo_brief_loss_keeps_origin_then_times_out():
+    g = menu()
+    t = opened(g)
+    _, t = feed(g, t, index_hand(0, 200), 10)
+    evs, t = feed(g, t, None, 100)  # 1.0 s without the hand
+    assert key_events(evs) == []
+    evs, t2 = feed(g, t, index_hand(12, 200), 2)
+    assert key_events(evs) == [] and last(evs)["hover"] == 1
+    evs, _ = feed(g, t2, None, 160)
+    assert key_events(evs) == [("end", "lost")]
+
+
+def test_oriondo_second_hand_ignored_while_open():
+    g = menu()
+    t = opened(g)
+    evs = [e for i in range(50) for e in g.update(Frame(t=t + i / 100, hands=(
+        index_hand(0, 200), make_hand("left", extended={"index", "middle"}, palm=(0, 200, 0)))))]
+    assert key_events(evs) == [] and {e.hand for e in evs} == {"right"} and len(evs) == 50
+
+
+def test_oriondo_no_items_never_opens():
+    assert feed(menu([]), 0.0, PEACE(), 80)[0] == []
+
+
+@pytest.mark.parametrize("deg", [0, 90, 200, 300])
+def test_oriondo_one_item_any_direction(deg):
+    g = menu(1)
+    t = opened(g)
+    assert last(feed(g, t, polar(deg, 12), 3)[0])["hover"] == 0
+    assert key_events(feed(g, t + 0.03, polar(deg, 36), 1)[0])[0][1]["index"] == 0
+
+
+def test_oriondo_unknown_trigger_is_inert():
+    assert feed(menu(trigger="nope"), 0.0, PEACE(), 80)[0] == []
+
+
+def test_oriondo_lingering_pose_does_not_reopen():
+    g = menu()
+    t = opened(g)
+    evs, t = feed(g, t, make_hand(extended={"index", "middle"}, palm=(0, 236, 0)), 1)
+    assert [p for p, _ in key_events(evs)] == ["fire", "end"]
+    assert feed(g, t, make_hand(extended={"index", "middle"}, palm=(0, 236, 0)), 200)[0] == []
+
+
+def test_oriondo_cooldown_blocks_a_quick_reopen():
+    g = menu()
+    t = opened(g)
+    _, t = feed(g, t, polar(0, 36), 1)  # fires
+    _, t = feed(g, t, None, 15)  # pose ends
+    evs, t = feed(g, t, PEACE(), 50)  # a new hold completes inside the 0.6 s cooldown
+    assert key_events(evs) == []
+    _, t = feed(g, t, None, 20)
+    evs, _ = feed(g, t, PEACE(), 50)
+    assert [p for p, _ in key_events(evs)] == ["begin"]
+
+
+def test_oriondo_allow_false_blocks_open():
+    g = menu()
+    g.allow = lambda: False
+    assert feed(g, 0.0, PEACE(), 80)[0] == []
+
+
+def test_oriondo_reset_keeps_items_and_allow():
+    g = menu()
+    allow = g.allow = lambda: True
+    g.reset()
+    assert g.allow is allow
+    assert [p for p, _ in key_events(feed(g, 0.0, PEACE(), 50)[0])] == ["begin"]
