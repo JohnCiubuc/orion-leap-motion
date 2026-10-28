@@ -13,6 +13,7 @@ import os
 import shutil
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 from .gestures import REGISTRY
@@ -20,7 +21,7 @@ from .gestures import REGISTRY
 log = logging.getLogger("orion.overlay")
 SCRIPT = Path(__file__).with_name("overlay_gtk.py")
 LIBS = ("/usr/lib/libgtk4-layer-shell.so*", "/usr/lib/*/libgtk4-layer-shell.so*")
-QUIET = {"continuous"}  # families that would flood the overlay (pointer, zoom updates …)
+QUIET = {"continuous", "oriondo"}  # families that would flood the overlay (pointer, zoom updates …)
 
 
 def title(name: str) -> str:
@@ -34,6 +35,7 @@ class OverlayHost:
     def __init__(self, engine):
         self.engine, self.proc, self.cfg = engine, None, {}
         self.status, self.lock, self.ringing = "off", threading.Lock(), False
+        self.menu_t = 0.0  # when the last menu update went out
         engine.listeners.append(self.on_engine)
         engine.overlay = self
 
@@ -92,6 +94,19 @@ class OverlayHost:
         self.ringing = on
         if self.cfg.get("precision_ring", True):
             self.send({"type": "ring", "on": on})
+
+    @property
+    def ready(self) -> bool:
+        return self.proc is not None and self.proc.poll() is None and self.cfg.get("enabled", True)
+
+    def menu(self, msg: dict):
+        """OrionDo pie: marker updates are thinned to ~60 Hz (tracking is faster); everything else goes through."""
+        if msg["op"] == "update":
+            now = time.monotonic()
+            if now - self.menu_t < 0.016:
+                return
+            self.menu_t = now
+        self.send({"type": "menu", **msg})
 
     # ── Engine events → cards ─────────────────────────────────────────────────
 

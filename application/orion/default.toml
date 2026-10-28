@@ -47,6 +47,34 @@ edge = 27                # mm from the view's limits where precision is off, so 
 rest = 0.1               # mm of tremor ignored
 glide = 0.0694             # s for the cursor to glide back onto the hand after precision
 
+# OrionDo radial menu: the trigger pose opens a pie on the focused monitor, the index fingertip steers a marker,
+# and moving it out past `deadzone` mm hovers a slice while pulling to `pull` mm fires it. A fingertip tap at
+# the centre closes it. Items run any action; list order is clockwise from the top, spaced equally.
+[gestures.oriondo]
+trigger = "peace"
+deadzone = 8
+pull = 35
+
+[[gestures.oriondo.items]]
+label = "1"
+action = "input.keys"
+args = { combo = "1" }
+
+[[gestures.oriondo.items]]
+label = "2"
+action = "input.keys"
+args = { combo = "2" }
+
+[[gestures.oriondo.items]]
+label = "3"
+action = "input.keys"
+args = { combo = "3" }
+
+[[gestures.oriondo.items]]
+label = "4"
+action = "input.keys"
+args = { combo = "4" }
+
 # Profiles activate when the focused window's class matches `match` (regex).
 # Bindings with profile = "<name>" override "default" bindings for the same gesture.
 [profiles.zen]

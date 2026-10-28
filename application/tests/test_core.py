@@ -1036,3 +1036,130 @@ def test_oriondo_reset_keeps_items_and_allow():
     g.reset()
     assert g.allow is allow
     assert [p for p, _ in key_events(feed(g, 0.0, PEACE(), 50)[0])] == ["begin"]
+
+
+# ── OrionDo: engine, overlay host, config ────────────────────────────────────
+
+class _MenuOverlay:
+    ready, status = True, "on"
+
+    def __init__(self):
+        self.ops = []
+
+    def menu(self, msg):
+        self.ops.append(msg)
+
+    def ring(self, on):
+        pass
+
+    def configure(self, cfg):
+        pass
+
+
+def _menu_engine(monkeypatch, dry_run=False):
+    from orion.engine import Engine
+    e = Engine(Config(), dry_run=dry_run)
+    e.overlay, e.ran, e.events = _MenuOverlay(), [], []
+    monkeypatch.setattr(e.executor, "submit", lambda act, ev, args: e.ran.append((act.name, args)))
+    e.listeners.append(lambda kind, payload: e.events.append((kind, payload)))
+    return e
+
+
+def _menu_frames(e, hand, n=1, t0=0.0):  # a lone left hand: the handedness filter keeps it left
+    for i in range(n):
+        e.on_frame(Frame(t=t0 + i / 100, hands=(hand,)))
+
+
+def _op_names(e):
+    return [o["op"] for o in e.overlay.ops if o["op"] != "update"]
+
+
+def test_default_config_has_oriondo_menu():
+    g = Config()["gestures"]["oriondo"]
+    assert g["trigger"] == "peace"
+    assert [(i["label"], i["action"], i["args"]) for i in g["items"]] == [(str(n), "input.keys", {"combo": str(n)}) for n in (1, 2, 3, 4)]
+
+
+def test_saved_oriondo_items_keep_order_and_inline_args(tmp_path):
+    import tomllib
+    cfg = Config(tmp_path / "config.toml")  # not the shared config: other tests read it
+    cfg.data["gestures"]["oriondo"]["items"] = menu_items(3)[::-1]
+    cfg.save()
+    text = cfg.path.read_text()
+    assert "[gestures.oriondo.items.args]" not in text
+    assert [i["label"] for i in tomllib.loads(text)["gestures"]["oriondo"]["items"]] == ["3", "2", "1"]
+
+
+def test_overlay_menu_throttles_updates_only():
+    import time
+    from orion.overlay import OverlayHost
+    sent = []
+    host = OverlayHost(_ring_engine())
+    host.send = sent.append
+    for _ in range(3):
+        host.menu({"op": "update", "x": 0})
+    host.menu({"op": "fire", "index": 0})
+    host.menu({"op": "close"})
+    assert [m["op"] for m in sent] == ["update", "fire", "close"] and sent[0]["type"] == "menu"
+    time.sleep(0.02)
+    host.menu({"op": "update", "x": 1})
+    assert len(sent) == 4
+
+
+def test_engine_forwards_menu_and_runs_item_action(monkeypatch):
+    e = _menu_engine(monkeypatch)
+    _menu_frames(e, make_hand("left", extended={"index", "middle"}, palm=(0, 200, 0)), 60)
+    _menu_frames(e, index_hand(0, 200, side="left"), 3, 0.6)
+    _menu_frames(e, index_hand(0, 236, side="left"), 1, 0.63)
+    assert _op_names(e) == ["open", "fire", "close"]
+    assert e.overlay.ops[0]["labels"] == ["1", "2", "3", "4"] and any(o["op"] == "update" for o in e.overlay.ops)
+    assert next(o for o in e.overlay.ops if o["op"] == "fire")["index"] == 0
+    assert [r for r in e.ran if r[0] == "input.keys"] == [("input.keys", {"combo": "1"})]
+
+
+def test_engine_dry_run_shows_the_menu_but_runs_nothing(monkeypatch):
+    e = _menu_engine(monkeypatch, dry_run=True)
+    _menu_frames(e, make_hand("left", extended={"index", "middle"}, palm=(0, 200, 0)), 60)
+    _menu_frames(e, index_hand(0, 236, side="left"), 1, 0.6)
+    assert _op_names(e) == ["open", "fire", "close"] and e.ran == []
+
+
+def test_menu_blocked_when_paused_exclusive_or_no_overlay(monkeypatch):
+    e = _menu_engine(monkeypatch)
+    assert e._menu_ok()
+    e.router.paused = True
+    assert not e._menu_ok()
+    e.router.paused = False
+    e.router.modes.add("air_mouse")  # exclusive in the default config
+    assert not e._menu_ok()
+    e.router.modes.clear()
+    e.overlay.ready = False
+    assert not e._menu_ok()
+    e.overlay = None
+    assert not e._menu_ok()
+
+
+def test_menu_does_not_open_while_paused(monkeypatch):
+    e = _menu_engine(monkeypatch)
+    e.router.paused = True
+    _menu_frames(e, make_hand("left", extended={"index", "middle"}, palm=(0, 200, 0)), 80)
+    assert e.overlay.ops == []
+
+
+def test_unknown_item_action_reports_an_error(monkeypatch):
+    e = _menu_engine(monkeypatch)
+    e.cfg.data["gestures"]["oriondo"]["items"] = [{"label": "x", "action": "nope"}]
+    e.build_gestures()
+    _menu_frames(e, make_hand("left", extended={"index", "middle"}, palm=(0, 200, 0)), 60)
+    _menu_frames(e, index_hand(0, 236, side="left"), 1, 0.6)
+    assert [p["action"] for k, p in e.events if k == "error"] == ["nope"] and e.ran == []
+
+
+def test_reload_closes_an_open_menu(monkeypatch):
+    e = _menu_engine(monkeypatch)
+    _menu_frames(e, make_hand("left", extended={"index", "middle"}, palm=(0, 200, 0)), 60)
+    assert _op_names(e) == ["open"]
+    e.reload_config()
+    assert _op_names(e) == ["open", "close"]
+    e.reload_config()  # nothing open any more: no second close
+    assert _op_names(e) == ["open", "close"]

@@ -63,6 +63,7 @@ class Engine:
         self.feed = deque(maxlen=50)  # recent gesture events for the UI
         self.source = self.overlay = None
         self._ring = False  # precision ring last signalled to the overlay
+        self._menu_open = False  # OrionDo pie shown on the overlay
         self.lock = threading.Lock()
         self.last_frame = self.last_restart = time.monotonic()
         self._restarting = threading.Lock()
@@ -97,6 +98,10 @@ class Engine:
         with self.lock:
             self.gestures = [cls(conf.get(name)) for name, cls in REGISTRY.items()
                              if conf.get(name, {}).get("enabled", True)]
+            for g in self.gestures:
+                if g.name == "oriondo":
+                    g.allow = self._menu_ok
+        self._menu_close()  # a rebuilt gesture has forgotten its open menu
 
     def reload_config(self, data: dict | None = None):
         """Apply a config (from the UI) or re-read the file (hand edit)."""
@@ -128,8 +133,36 @@ class Engine:
                 self.emit("event", entry)
                 if ev.name == "path.recorded":
                     self.emit_state()
+            if ev.name == "oriondo":
+                self._oriondo(ev)
         self.emit("frame", frame)
         self._sync_ring()
+
+    def _menu_ok(self) -> bool:
+        """OrionDo may open: it needs the overlay to be seen, and stays out of paused and exclusive-mode use."""
+        return bool(self.overlay and self.overlay.ready) and not self.router.paused and not self.router.exclusive
+
+    def _menu_close(self):
+        if self._menu_open:
+            self._menu_open = False
+            if self.overlay:
+                self.overlay.menu({"op": "close"})
+
+    def _oriondo(self, ev: GestureEvent):
+        """Mirror the menu on the overlay; a fired item runs like any bound action."""
+        v = ev.value
+        op = ({"op": "open", "labels": v["labels"]} if ev.phase == "begin" else {"op": "update", **v} if ev.phase == "update"
+              else {"op": "fire", "index": v["index"]} if ev.phase == "fire" else {"op": "close"})
+        self._menu_open = ev.phase != "end"
+        if self.overlay:
+            self.overlay.menu(op)
+        if ev.phase == "fire":
+            item = ev.value["item"]
+            act = ACTIONS.get(item.get("action", ""))
+            if act is None:
+                self.emit("error", {"action": item.get("action", ""), "error": "unknown action"})
+            elif not self.dry_run:
+                self.executor.submit(act, ev, item.get("args", {}))
 
     def _sync_ring(self):
         on = any(g.precise for g in self.gestures if g.name == "desktop_pointer")
