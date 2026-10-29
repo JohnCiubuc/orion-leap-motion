@@ -70,7 +70,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 # Project notes: OrionDo (resume here)
 
-Last updated 2026-10-28. OrionDo is merged to `master` and pushed (head `4d615d8`). The webcam source is on branch `webcam-source`, pushed but NOT merged (see Pending 7: not reliable yet). Webcam spec/plan are in `docs/superpowers/`.
+Last updated 2026-10-28. OrionDo is merged to `master` and pushed (head `4d615d8`). The webcam source is merged to `master` and pushed but is experimental (see Pending 7: not reliable yet). Webcam spec/plan are in `docs/superpowers/`.
 
 ## What it is
 **OrionDo** = a Kando-style radial menu for the Orion Leap Motion app, driven by the **index fingertip** (not the OS cursor). Peace sign (held ~0.3 s) opens an animated pie centred on the focused monitor; moving the fingertip past `deadzone` (8 mm) hovers a slice; pulling to `pull` (35 mm) fires it. Firing is by movement only. A fingertip tap at the centre, or losing the hand for 1.5 s, closes it. Default items press `1`–`4` via the `input.keys` action (uinput). Wanted later: submenus, launching apps, macros.
@@ -98,7 +98,7 @@ Last updated 2026-10-28. OrionDo is merged to `master` and pushed (head `4d615d8
 Closed by the user 2026-10-28 (not fixed, just dropped): former items 1-3 (real-hand tuning, other gestures co-firing while the pie is open, small UI fixes: drag tween restart / focus after deleting last slice / second pointer).
 4. Minor engine: update throttle can drop the last 16 ms before a fire; `_menu_open` touched from two threads unlocked; `OverlayHost.send` is a blocking pipe write (pre-existing pattern); marker dot can cover a slice label; README `layerrule` examples omit the `orion-menu` namespace.
 5. Minor UI: a11y (12 tab stops, shortcuts undiscoverable, warning dot not in `aria-label`, CSS animations ignore reduced motion); `fitLabel` cuts by code point; slider nudge off/on dirties the draft; clean state push rebuilds the wheel; unknown action shows "No settings"; trigger missing from the choice list shows a blank select.
-7. **Webcam source: known problems after the first real-hand test (2026-10-28), branch `webcam-source`, not merged.** It runs (C922, ~24 fps, MediaPipe 1.2.0 + OpenCV 5.0.0 installed in `.venv`, model cached in `~/.cache/orion-renewal/`) but is not usable day to day yet:
+7. **Webcam source: known problems after the first real-hand test (2026-10-28), merged but experimental.** It runs (C922, ~24 fps, MediaPipe 1.2.0 + OpenCV 5.0.0 installed in `.venv`, model cached in `~/.cache/orion-renewal/`) but is not usable day to day yet:
    - Tracking is unreliable and glitches (jitter, flicker, wrong poses). Not yet diagnosed: log real detections (landmarks, labels, straightness, `extended`, ids) with a live camera script before tuning anything.
    - Detection needs the hand fully in profile (palm square to the camera, fingers up). Other angles lose or distort the landmarks.
    - A hand held horizontal (pointing at the camera) is not understood, even right after it was seen upright: the track is lost or the pose reads wrong. Ideas: keep the track and last-known pose through a short unreadable stretch, estimate pose from 3D world landmarks instead of image geometry, or a second camera angle.
