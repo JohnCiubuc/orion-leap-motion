@@ -21,6 +21,7 @@ from aiohttp import WSMsgType, web
 from .actions import ACTIONS
 from .config import CONFIG_DIR, PLUGIN_DIR, RECORDINGS_DIR
 from .frame import pack_ir, pack_skeleton
+from . import menu_preview
 from .gestures import GestureEvent
 
 log = logging.getLogger("orion.server")
@@ -72,6 +73,7 @@ class Server:
         self.loop = asyncio.get_running_loop()
         app = web.Application()
         app.router.add_get("/ws", self.ws_handler)
+        app.router.add_get("/skin/{name}", self.skin_preview)
         app.router.add_get("/", lambda r: web.FileResponse(WEB_DIR / "index.html"))
         if WEB_DIR.exists():
             app.router.add_static("/", WEB_DIR)
@@ -116,6 +118,25 @@ class Server:
             c.wake.set()
 
     # ── WebSocket ─────────────────────────────────────────────────────────────
+
+    async def skin_preview(self, request):
+        """PNG of a skin for the OrionDo editor (`?labels=[..]&weights=[..]&hue=&invert=1`)."""
+        q = request.query
+        if q.get("token") != self.token:
+            raise web.HTTPForbidden()
+        try:
+            labels = [str(x) for x in json.loads(q.get("labels", '["1","2","3","4"]'))][:12] or ["1"]
+            weights = [min(max(float(x), 0.1), 4.0) for x in json.loads(q.get("weights", "[]"))][: len(labels)]
+            weights += [1.0] * (len(labels) - len(weights))
+            hue = float(q["hue"]) % 360 if "hue" in q else None
+        except (ValueError, TypeError):
+            raise web.HTTPBadRequest()
+        try:
+            png = await asyncio.to_thread(menu_preview.png, request.match_info["name"].removesuffix(".png"), labels, weights, hue, q.get("invert") == "1")
+        except (OSError, subprocess.SubprocessError) as e:  # no system Python with pycairo
+            log.warning("skin preview failed: %s", e)
+            raise web.HTTPServiceUnavailable()
+        return web.Response(body=png, content_type="image/png", headers={"Cache-Control": "max-age=60"})
 
     async def ws_handler(self, request):
         origin = request.headers.get("Origin", "")

@@ -905,7 +905,7 @@ def key_events(evs):
 
 def test_oriondo_opens_on_trigger_pose():
     evs, _ = feed(menu(), 0.0, PEACE(), 50)
-    assert key_events(evs) == [("begin", {"labels": ["1", "2", "3", "4"]})]
+    assert key_events(evs) == [("begin", {"labels": ["1", "2", "3", "4"], "subs": [False] * 4, "weights": [1.0] * 4, "skin": "aurora", "hue": None, "invert": False})]
     assert {e.name for e in evs} == {"oriondo"} and {e.hand for e in evs} == {"right"}
 
 
@@ -1318,3 +1318,268 @@ def test_save_adds_a_new_top_level_table_and_keeps_comments(tmp_path):
     text = path.read_text()
     assert "# my note" in text and "# inline note" in text
     assert tomllib.loads(text)["general"]["source"] == "webcam" and tomllib.loads(text)["webcam"]["device"] == "auto"
+
+
+# ── OrionDo: submenus ─────────────────────────────────────────────────────────
+
+def sub(label="S", n=3, **extra):
+    return {"label": label, "items": menu_items(n), **extra}
+
+
+def at(origin, deg, mm):  # index hand `mm` from `origin` (x, y), `deg` clockwise from the top
+    return index_hand(origin[0] + mm * math.sin(math.radians(deg)), origin[1] + mm * math.cos(math.radians(deg)))
+
+
+def entered(items=None):
+    """A menu with the submenu in slice 0, pulled open from the top: (gesture, enter events, next t, new origin)."""
+    g = menu(items or [sub(), *menu_items(1)])
+    evs, t = feed(g, opened(g), polar(0, 36), 1)
+    return g, evs, t, (0, 236)
+
+
+def test_slot_angles_layout():
+    from orion.gestures.oriondo import slot_angles
+    assert slot_angles(4, None) == [0, 90, 180, 270]
+    assert slot_angles(3, 180) == pytest.approx([270, 0, 90])
+    assert slot_angles(2, 90) == pytest.approx([210, 330])
+    assert slot_angles(1, 0) == pytest.approx([180])
+
+
+def test_slot_layout_weights():
+    from orion.gestures.oriondo import slot_layout
+    assert slot_layout([1, 1, 1, 1], None) == [(0, 90), (90, 90), (180, 90), (270, 90)]
+    assert sum(slot_layout([2, 1, 1], None), ()) == pytest.approx((0, 180, 135, 90, 225, 90))  # still centred on the top
+    assert sum(slot_layout([1, 0.5], 180), ()) == pytest.approx((180, 144, 324, 144, 72, 72))  # the free slot faces the parent
+
+
+def test_oriondo_hover_follows_weights():
+    from orion.gestures.oriondo import OrionDo
+    g = OrionDo({"items": [{"label": "a"}, {"label": "b", "weight": 0.25}, {"label": "c"}]})
+    g.menu = {"items": g.items, "back": None}
+    at = lambda deg: g._sector((10 * math.sin(math.radians(deg)), 10 * math.cos(math.radians(deg))), 10, None)  # noqa: E731
+    assert [at(0), at(70), at(100), at(200), at(300)] == [0, 0, 1, 2, 0]  # a: -80…80, b: 80…120, c: 120…280
+
+
+def test_oriondo_enter_submenu_instead_of_firing():
+    _, evs, _, _ = entered()
+    assert [p for p, _ in key_events(evs)] == ["enter"]
+    v = key_events(evs)[0][1]
+    assert v["labels"] == ["1", "2", "3"] and v["back"] == 180 and v["depth"] == 1 and v["parent"] == "S"
+
+
+def test_oriondo_enter_reanchors_and_cannot_refire():
+    g, _, t, o = entered()
+    evs, _ = feed(g, t, index_hand(*o), 30)
+    assert key_events(evs) == [] and all(e.value["hover"] is None for e in evs)
+
+
+def test_oriondo_submenu_child_hovers_by_its_angle_and_fires():
+    g, _, t, o = entered()
+    assert last(feed(g, t, at(o, 0, 12), 3)[0])["hover"] == 1  # straight on: the middle of three children
+    assert last(feed(g, t + 0.03, at(o, 90, 12), 3)[0])["hover"] == 2
+    evs, _ = feed(g, t + 0.06, at(o, 0, 40), 1)
+    assert [p for p, _ in key_events(evs)] == ["fire", "end"] and key_events(evs)[0][1]["index"] == 1
+
+
+def test_oriondo_back_gap_hover_and_back():
+    g, _, t, o = entered()
+    assert last(feed(g, t, at(o, 180, 12), 3)[0])["hover"] == -1
+    evs, _ = feed(g, t + 0.03, at(o, 180, 40), 1)
+    assert [p for p, _ in key_events(evs)] == ["back"]
+    v = key_events(evs)[0][1]
+    assert v["depth"] == 0 and v["back"] is None and v["away"] == 180 and v["labels"] == ["S", "1"]
+
+
+def test_oriondo_back_to_nested_parent():
+    g = menu([{"label": "A", "items": [sub("B", 3)]}])
+    t = opened(g)
+    _, t = feed(g, t, polar(0, 36), 1)  # into A: its only child B sits straight up
+    evs, t = feed(g, t, at((0, 236), 0, 36), 1)  # into B
+    assert key_events(evs)[0][1]["depth"] == 2
+    evs, _ = feed(g, t, at((0, 272), 180, 36), 1)
+    v = key_events(evs)[0][1]
+    assert key_events(evs)[0][0] == "back" and v["depth"] == 1 and v["back"] == 180 and v["away"] == 180
+
+
+def test_oriondo_empty_or_malformed_submenu_is_inert():
+    g = menu([{"label": "E", "items": []}, {"label": "M", "items": "x"}, *menu_items(1)])
+    t = opened(g)
+    for deg in (0, 120):
+        evs, t = feed(g, t, polar(deg, 36), 3)
+        assert key_events(evs) == []
+    evs, _ = feed(g, t, polar(240, 36), 1)
+    assert [p for p, _ in key_events(evs)] == ["fire", "end"]
+    g2 = menu([{"label": "B", "action": "input.keys", "args": {}, "items": menu_items(2)}])
+    evs, _ = feed(g2, opened(g2), polar(0, 36), 1)
+    assert [p for p, _ in key_events(evs)] == ["enter"]
+
+
+def test_oriondo_lost_hand_inside_submenu_closes_everything():
+    g, _, t, _ = entered()
+    evs, _ = feed(g, t, None, 160)
+    assert key_events(evs) == [("end", "lost")]
+
+
+def test_oriondo_centre_tap_inside_submenu_closes_everything():
+    g, _, t, o = entered()
+    _, t = feed(g, t, index_hand(*o), 30)
+    evs = [e for i in range(8) for e in feed(g, t + i / 100, index_hand(o[0], o[1], dip=i * 1.5))[0]]
+    assert key_events(evs) == [("end", "tap")]
+
+
+def test_oriondo_returning_far_away_in_a_submenu_does_not_back_or_fire():
+    g, _, t, o = entered()
+    _, t = feed(g, t, index_hand(*o), 10)
+    _, t = feed(g, t, None, 50)
+    evs, _ = feed(g, t, at(o, 180, 42), 5)
+    assert key_events(evs) == [] and last(evs)["hover"] is None
+
+
+# ── OrionDo: submenus through the engine ─────────────────────────────────────
+
+def _sub_engine(monkeypatch):
+    e = _menu_engine(monkeypatch)
+    e.cfg.data["gestures"]["oriondo"]["items"] = [sub(), *menu_items(1)]
+    e.build_gestures()
+    return e
+
+
+def test_engine_forwards_enter_and_back_ops(monkeypatch):
+    e = _sub_engine(monkeypatch)
+    _menu_frames(e, make_hand("left", extended={"index", "middle"}, palm=(0, 200, 0)), 60)
+    _menu_frames(e, index_hand(0, 200, side="left"), 3, 0.6)
+    _menu_frames(e, index_hand(0, 236, side="left"), 1, 0.63)  # pull the submenu
+    _menu_frames(e, index_hand(0, 200, side="left"), 1, 0.64)  # and pull back toward its parent
+    assert _op_names(e) == ["open", "enter", "back"]
+    enter, back = next(o for o in e.overlay.ops if o["op"] == "enter"), e.overlay.ops[-1]
+    assert (enter["labels"], enter["subs"], enter["back"], enter["depth"], enter["parent"]) == (["1", "2", "3"], [False] * 3, 180, 1, "S")
+    assert (back["labels"], back["subs"], back["back"], back["depth"], back["away"]) == (["S", "1"], [True, False], None, 0, 180)
+    assert e.ran == []  # entering a submenu never runs an action
+
+
+def test_open_op_carries_skin_and_subs(monkeypatch):
+    e = _menu_engine(monkeypatch)
+    _menu_frames(e, make_hand("left", extended={"index", "middle"}, palm=(0, 200, 0)), 60)
+    assert e.overlay.ops[0] == {"op": "open", "labels": ["1", "2", "3", "4"], "subs": [False] * 4, "weights": [1.0] * 4, "skin": "aurora", "hue": None, "invert": False}
+
+
+def test_default_config_names_the_aurora_skin():
+    assert Config()["gestures"]["oriondo"]["skin"] == "aurora"
+
+
+# ── OrionDo: submenu animation model ─────────────────────────────────────────
+
+def _dirs(slices):  # angles compared as directions so 0 and 2π agree
+    return [(round(math.sin(s.angle), 6), round(math.cos(s.angle), 6)) for s in slices]
+
+
+def _want(*deg):
+    return [(round(math.sin(math.radians(d)), 6), round(math.cos(math.radians(d)), 6)) for d in deg]
+
+
+def _entered(back=180, now=1.0, settle=True):
+    a = _anim()
+    a.update(0, 0.9, 0, 1.0, 0.9)  # the first item is the one being pulled
+    a.enter(["a", "b", "c"], now, back, "S")
+    if settle:
+        a.step(now + 1.0)
+    return a
+
+
+def test_anim_slice_angles_root_and_submenu():
+    assert _dirs(_anim().step(0.6).slices) == _want(0, 90, 180, 270)
+    v = _entered().step(2.5)
+    assert _dirs(v.slices) == _want(270, 0, 90) and v.slots == 4 and v.back.angle == pytest.approx(math.pi)
+    assert _anim().step(0.6).back is None and _anim().step(0.6).slots == 4
+
+
+def test_anim_enter_travels_with_a_spring_and_hands_over_the_layers():
+    a = _entered(settle=False)
+    assert a.step(1.0).pan == pytest.approx((0, -1), abs=0.05)  # the new centre sits where the item was
+    assert [s.scale for s in a.step(1.0).slices] == [0, 0, 0]  # the children bloom from nothing
+    leaving = a.step(1.1).leaving
+    assert len(leaving) == 1 and leaving[0].picked == 0 and 0 < leaving[0].leave < 1 and leaving[0].slots == 4
+    ys = [a.step(1.1 + i / 100).pan[1] for i in range(1, 90)]
+    assert max(ys) > 0.01 and ys[-1] == pytest.approx(0, abs=0.01)  # overshoots, then settles
+    assert a.step(1.5).leaving == []
+    assert [s.scale for s in a.step(2.0).slices] == pytest.approx([1.0] * 3)
+
+
+def test_anim_ghosts_follow_the_path_up():
+    a = _entered()
+    g = a.step(2.5).ghosts
+    assert len(g) == 1 and (g[0].x, g[0].y) == pytest.approx((0, 1), abs=1e-6) and g[0].alpha == pytest.approx(0.6, abs=0.02) and g[0].label == "S"
+    a.update(0, 0, 1, 1.0, 3.0)
+    a.enter(["x"], 3.0, 90, "T")
+    g = a.step(5.0).ghosts
+    assert [(x.label, round(x.x, 6), round(x.y, 6)) for x in g] == [("T", 1.0, 0.0), ("S", 1.0, 1.0)]
+    assert [x.alpha for x in g] == pytest.approx([0.6, 0.3], abs=0.02)
+    a.back(["a", "b", "c"], 6.0, 180, 90)
+    assert [x.label for x in a.step(8.0).ghosts] == ["S"]
+
+
+def test_anim_back_travels_toward_the_parent():
+    a = _entered()
+    a.back(["1", "2", "3", "4"], 3.0, None, 180)
+    assert a.step(3.0).pan == pytest.approx((0, 1), abs=0.05)
+    v = a.step(3.1)
+    assert len(v.leaving) == 1 and v.leaving[0].picked is None
+    v = a.step(4.5)
+    assert v.pan == pytest.approx((0, 0), abs=0.01) and v.back is None and v.ghosts == [] and v.leaving == []
+    assert [s.label for s in v.slices] == ["1", "2", "3", "4"]
+
+
+def test_anim_back_gap_hover_lifts_the_gap_not_a_slice():
+    a = _entered()
+    a.update(0, -0.5, -1, 0.5, 2.5)
+    v = a.step(3.0)
+    assert v.hover == -1 and v.back.lift > 0.9 and v.back.stretch == pytest.approx(0.5, abs=0.02)
+    assert [s.lift for s in v.slices] == [0, 0, 0] and v.arc == pytest.approx(0.5, abs=0.02)
+
+
+def test_anim_pulse_restarts_on_enter_and_back():
+    a = _entered(settle=False)
+    assert a.step(1.0).pulse < 0.1 and a.step(1.5).pulse == 1.0
+    a.back(["1", "2", "3", "4"], 2.0, None, 180)
+    assert a.step(2.0).pulse < 0.1 and a.step(2.5).pulse == 1.0
+
+
+def test_anim_reversing_mid_travel_keeps_the_scene_continuous():
+    a = _entered(settle=False)
+    v = a.step(1.05)
+    root_centre = (v.pan[0] + v.ghosts[0].x, v.pan[1] + v.ghosts[0].y)  # where the parent sits right now
+    a.back(["1", "2", "3", "4"], 1.05, None, 180)
+    assert a.step(1.05).pan == pytest.approx(root_centre, abs=0.02)
+
+
+def test_anim_reduced_motion_jumps():
+    from orion.menu_anim import MenuAnim
+    a = MenuAnim(reduced_motion=True)
+    a.open(["1", "2"], 0.0)
+    a.update(0, 0.9, 0, 1.0, 0.1)
+    a.enter(["a", "b"], 0.2, 180, "S")
+    v = a.step(0.25)
+    assert v.pan == (0, 0) and v.leaving == [] and [s.scale for s in v.slices] == pytest.approx([1.0, 1.0])
+
+
+def test_oriondo_non_dict_items_are_dropped():
+    g = menu(["x", 3, *menu_items(2)])
+    assert key_events(feed(g, 0.0, PEACE(), 50)[0]) == [("begin", {"labels": ["1", "2"], "subs": [False, False], "weights": [1.0, 1.0], "skin": "aurora", "hue": None, "invert": False})]
+    g = menu([{"label": "S", "items": ["a", 1, {"label": "ok"}]}, *menu_items(1)])
+    evs, _ = feed(g, opened(g), polar(0, 36), 1)
+    assert key_events(evs)[0][1]["labels"] == ["ok"]
+    g = menu([{"label": "S", "items": ["a", "b"]}, *menu_items(1)])
+    t = opened(g)
+    evs, t = feed(g, t, polar(0, 36), 3)
+    assert key_events(evs) == []  # a submenu with nothing usable in it is inert
+    evs, _ = feed(g, t, polar(180, 36), 1)
+    assert [p for p, _ in key_events(evs)] == ["fire", "end"]
+
+
+def test_oriondo_a_flick_right_after_entering_does_not_tap_close():
+    g, _, t, o = entered()
+    evs = [e for i in range(8) for e in feed(g, t + i / 100, index_hand(o[0], o[1], dip=i * 1.5))[0]]
+    assert key_events(evs) == []  # the fingertip springing back as the pie travels is not a tap
+    _, t = feed(g, t + 0.08, index_hand(*o), 30)
+    evs = [e for i in range(8) for e in feed(g, t + i / 100, index_hand(o[0], o[1], dip=i * 1.5))[0]]
+    assert key_events(evs) == [("end", "tap")]  # a real one, later, still closes

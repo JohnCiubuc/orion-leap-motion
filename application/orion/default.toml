@@ -31,6 +31,7 @@ corner = "top-right"     # top-right | top-left | bottom-right | bottom-left
 margin = 16              # px from the screen edges (bars like Waybar are already accounted for)
 show_unbound = false     # also show gestures that have no binding
 precision_ring = true    # ring around the cursor while the desktop pointer is in precision mode
+reduced_motion = false   # OrionDo pie transitions jump instead of animating
 
 # Per-gesture tuning: [gestures.<name>] enabled = false / <param> = value
 [gestures.swipe]
@@ -64,6 +65,7 @@ glide = 0.0694             # s for the cursor to glide back onto the hand after 
 # the centre closes it. Items run any action; list order is clockwise from the top, spaced equally.
 [gestures.oriondo]
 trigger = "peace"
+skin = "aurora"          # how the pie is drawn on screen (orion/menu_skins)
 deadzone = 8
 pull = 35
 

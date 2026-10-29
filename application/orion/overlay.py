@@ -49,7 +49,7 @@ class OverlayHost:
             return
         if self.proc is None or self.proc.poll() is not None:
             self.start()
-        self.send({"type": "config", **{k: cfg[k] for k in ("opacity", "seconds", "corner", "margin", "precision_ring") if k in cfg}})
+        self.send({"type": "config", **{k: cfg[k] for k in ("opacity", "seconds", "corner", "margin", "precision_ring", "reduced_motion") if k in cfg}})
         if self.ringing:  # a setting flip while the ring is up hides or restores it
             self.send({"type": "ring", "on": bool(cfg.get("precision_ring", True))})
 
