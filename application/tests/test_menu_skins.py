@@ -97,3 +97,73 @@ def test_render_contact_sheet():
         surf.write_to_png(str(Path(out) / f"{label.replace('+', '_')}.png"))
 
     _tour(skin, frame)
+
+
+# ── MenuController (the overlay window's GTK-free half) ──────────────────────
+
+from orion import menu_skins  # noqa: E402
+from orion.menu_ctl import MenuController  # noqa: E402
+
+
+def _ctl(**kw):
+    return MenuController(MenuAnim, get_skin, **kw)
+
+
+def _open(ctl, skin=None, now=0.0):
+    ctl.handle({"op": "open", "labels": ["1", "2", "3", "4"], "subs": [False, True, False, False], "skin": skin}, now)
+
+
+def test_controller_unknown_skin_uses_the_default():
+    ctl = _ctl()
+    _open(ctl, "nope")
+    assert ctl.skin is get_skin("aurora")
+
+
+def test_controller_routes_enter_and_back_to_the_animation():
+    ctl = _ctl()
+    _open(ctl)
+    ctl.handle({"op": "update", "x": 0, "y": 0.9, "hover": 1, "pull": 1.0}, 0.5)
+    ctl.handle({"op": "enter", "labels": ["a", "b"], "subs": [False, False], "back": 270, "depth": 1, "parent": "2"}, 0.6)
+    assert ctl.view(0.61).pan != (0, 0) and [s.label for s in ctl.view(0.61).slices] == ["a", "b"]
+    ctl.handle({"op": "back", "labels": ["1", "2", "3", "4"], "subs": [False] * 4, "back": None, "depth": 0, "away": 270}, 1.0)
+    assert [s.label for s in ctl.view(1.01).slices] == ["1", "2", "3", "4"]
+
+
+def test_controller_reduced_motion_reaches_the_animation():
+    ctl = _ctl(reduced_motion=True)
+    _open(ctl)
+    ctl.handle({"op": "enter", "labels": ["a", "b"], "subs": [False, False], "back": 270, "depth": 1, "parent": "2"}, 0.6)
+    assert ctl.view(0.62).pan == (0, 0)
+
+
+def test_controller_ignores_ops_before_open():
+    ctl = _ctl()
+    ctl.handle({"op": "update", "x": 0, "y": 0, "hover": None, "pull": 0}, 0.0)
+    assert ctl.view(0.0) is None
+
+
+def test_a_skin_that_raises_is_dropped_for_the_default():
+    @menu_skins.skin("boom")
+    class Boom:
+        MOTION = {}
+
+        def draw(self, cr, v, w, h):
+            raise RuntimeError("bad skin")
+
+    try:
+        ctl = _ctl()
+        _open(ctl, "boom")
+        assert ctl.draw(None, ctl.view(0.5), SIZE, SIZE) is False  # reported, not raised
+        _open(ctl, "boom", 1.0)
+        assert ctl.skin is get_skin("aurora") and not ctl.broken
+    finally:
+        menu_skins._SKINS.pop("boom", None)
+
+
+def test_a_default_skin_that_raises_breaks_the_menu_for_good(monkeypatch):
+    ctl = _ctl()
+    _open(ctl)
+    monkeypatch.setattr(type(get_skin("aurora")), "draw", lambda *a: (_ for _ in ()).throw(RuntimeError("x")))
+    assert ctl.draw(None, ctl.view(0.5), SIZE, SIZE) is False and ctl.broken
+    _open(ctl, None, 2.0)
+    assert ctl.view(2.1) is None  # nothing is drawn, nothing to leave on screen

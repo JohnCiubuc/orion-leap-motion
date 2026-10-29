@@ -7,7 +7,8 @@ layer-shell library. Reads JSON lines on stdin:
      "precision_ring": true}
     {"type": "show", "title": "Swipe left", "detail": "hypr.dispatch", "hand": "right", "key": "…"}
     {"type": "ring", "on": true}     # precision ring around the cursor (needs config precision_ring)
-    {"type": "menu", "op": "open", "labels": ["1", "2"]}   # OrionDo pie; also op update | fire | close
+    {"type": "menu", "op": "open", "labels": ["1", "2"], "subs": [false, true], "skin": "aurora"}   # OrionDo pie;
+        # also op enter | back (submenus) | update | fire | close; see menu_ctl.py
 
 It is a wlr-layer-shell surface, not a window: Hyprland never tiles, focuses or lists it,
 it takes no keyboard focus and clicks pass straight through it.
@@ -151,6 +152,7 @@ class Overlay:
     def handle(self, msg):
         if msg.get("type") == "config":
             self.cfg.update({k: v for k, v in msg.items() if k != "type"})
+            self.menu.set_reduced(self.cfg.get("reduced_motion", False))
             self.apply_config()
             self.set_ring(self.ring_want)  # precision_ring may have flipped
         elif msg.get("type") == "show":
