@@ -95,7 +95,9 @@ class Engine:
         self.emit_state()
 
     def build_gestures(self):
-        conf = self.cfg["gestures"]
+        conf = dict(self.cfg["gestures"])
+        if self.cfg.general["source"] == "webcam" and not self.demo and self.cfg["webcam"]["trigger"]:
+            conf["oriondo"] = {**conf.get("oriondo", {}), "trigger": self.cfg["webcam"]["trigger"]}  # the webcam sees an open palm best
         with self.lock:
             self.gestures = [cls(conf.get(name)) for name, cls in REGISTRY.items()
                              if conf.get(name, {}).get("enabled", True)]

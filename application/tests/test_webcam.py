@@ -414,3 +414,18 @@ def test_oriondo_steers_with_an_upright_hand():
     evs = r.show(peace(220), 0.5)
     assert [e.value["hover"] for e in evs if e.phase == "update"][-1] == 0
     assert [p for p, _ in key(r.show(peace(250), 0.5))] == ["fire", "end"]
+
+
+def test_oriondo_opens_with_open_palm_on_the_webcam(tmp_path):
+    from orion.config import Config
+    from orion.engine import Engine
+    path = tmp_path / "config.toml"
+    path.write_text('[general]\nsource = "webcam"\n[gestures.oriondo]\ntrigger = "peace"\n')
+    cfg = Config(path)
+    trigger = lambda: next(g for g in Engine(cfg, dry_run=True).gestures if g.name == "oriondo").p["trigger"]  # noqa: E731
+    assert trigger() == "open_palm"  # the webcam's own setting wins over the Leap-oriented one
+    cfg.data["webcam"]["trigger"] = ""
+    assert trigger() == "peace"  # empty = use [gestures.oriondo]
+    cfg.data["general"]["source"] = "leap"
+    cfg.data["webcam"]["trigger"] = "open_palm"
+    assert trigger() == "peace"  # Leap untouched

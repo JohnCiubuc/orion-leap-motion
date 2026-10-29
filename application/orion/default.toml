@@ -19,6 +19,7 @@ fps = 30
 mirror = true            # flip the image so moving your hand right moves it right
 hand_mm = 95             # wrist to middle-knuckle length, used to estimate distance from the camera
 fov_deg = 70             # the camera's horizontal field of view
+trigger = "open_palm"   # pose that opens OrionDo on the webcam (replaces [gestures.oriondo] trigger there; "" = keep it)
 tilt = 90                # degrees to lay your hand flat: the webcam sees it upright, gestures expect it over a Leap (0 = off)
 
 # Gesture overlay: a translucent card in a corner of the focused monitor (layer-shell, click-through).
