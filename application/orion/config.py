@@ -83,14 +83,15 @@ def _insert_after_keys(table, key, value, plain=True):
     """Place a new `key` next to its siblings instead of after the comments that introduce the next
     section. Plain keys go before any sub-tables ([[x.on_enter]]), where TOML would silently file
     them under that sub-table; new sub-tables go after the last existing entry."""
-    body = table.value.body
+    container = table if isinstance(table, tomlkit.TOMLDocument) else table.value  # the document is its own container
+    body = container.body
     keys = [i for i, (k, v) in enumerate(body) if k is not None
             and not (plain and isinstance(v, (tomlkit.items.Table, tomlkit.items.AoT)))]
     at = (keys[-1] + 1) if keys else 0
     if at >= len(body):
         table[key] = value
     else:
-        table.value._insert_at(at, key, value)
+        container._insert_at(at, key, value)
 
 
 def _clean(v):

@@ -3,6 +3,7 @@
 import math
 import os
 import tempfile
+import tomllib
 
 import numpy as np
 import pytest
@@ -1306,3 +1307,14 @@ def test_config_carries_webcam_defaults(tmp_path):
     path.write_text('[general]\nsource = "webcam"\n')
     cfg = Config(path)
     assert cfg["webcam"]["device"] == "auto" and cfg["webcam"]["mirror"] is True
+
+
+def test_save_adds_a_new_top_level_table_and_keeps_comments(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text('# my note\n[general]\nsource = "leap"  # inline note\n')
+    cfg = Config(path)  # load() adds the default [webcam] table, which the file does not have
+    cfg.data["general"]["source"] = "webcam"
+    cfg.save()
+    text = path.read_text()
+    assert "# my note" in text and "# inline note" in text
+    assert tomllib.loads(text)["general"]["source"] == "webcam" and tomllib.loads(text)["webcam"]["device"] == "auto"
