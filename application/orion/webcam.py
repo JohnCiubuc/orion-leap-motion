@@ -44,13 +44,14 @@ class Cam:
     height: int = 480
     fov_deg: float = 70  # horizontal
     hand_mm: float = 95  # wrist → middle-knuckle
+    tilt_deg: float = 0  # pitch applied to the hand's shape about its palm: 90 turns an upright hand into one lying flat
 
 
 @dataclass
 class Detection:
     image: np.ndarray  # (21, 3) normalised x, y (0..1, y down)
     world: np.ndarray  # (21, 3) metres, hand-centred, y down, z away from the camera
-    label: str  # "left" | "right" (the user's real hand: frames are mirrored before detection)
+    label: str  # "left" | "right" as the detector reports it
     score: float
 
 
@@ -106,7 +107,9 @@ def landmarks_to_hand(det: Detection, cam: Cam, prev_extended: frozenset[str] = 
                      -(c[1] - cam.height / 2) * z / f + PALM_HEIGHT,
                      z - NOMINAL_DISTANCE), np.float32)
     w = det.world * (1000, -1000, 1000)  # the fingertip keeps MediaPipe's own scale: re-scaling per frame would add jitter
-    w = w - w[list(PALM_LM)].mean(axis=0) + palm
+    a = math.radians(cam.tilt_deg)  # Orion's gestures expect the hand lying flat, as over a Leap: pitch it about the palm
+    pitch = np.array(((1, 0, 0), (0, math.cos(a), math.sin(a)), (0, -math.sin(a), math.cos(a))))
+    w = (w - w[list(PALM_LM)].mean(axis=0)) @ pitch.T + palm
     fingers, straight = [], []
     for k, name in enumerate(FINGERS):
         pts = w[4 * k + 1:4 * k + 5]
@@ -309,10 +312,14 @@ class WebcamSource(Source):
                 if self.cfg["mirror"]:
                     image = image[:, ::-1]  # so moving your hand right moves it right
                 if tracker is None:
-                    tracker = HandTracker(Cam(image.shape[1], image.shape[0], self.cfg["fov_deg"], self.cfg["hand_mm"]))
+                    tracker = HandTracker(Cam(image.shape[1], image.shape[0], self.cfg["fov_deg"], self.cfg["hand_mm"],
+                                              self.cfg["tilt"]))
                 fps += (1 / max(t - last, 1e-3) - fps) * 0.1
                 last, last_ms = t, max(int(t * 1000), last_ms + 1)  # the detector needs strictly rising timestamps
-                hands = tracker.update(t, detect(image[:, :, ::-1], last_ms))  # BGR → RGB
+                dets = detect(image[:, :, ::-1], last_ms)  # BGR → RGB
+                if self.cfg["mirror"]:  # the detector sees a mirrored hand, so it names the other side
+                    dets = [dataclasses.replace(d, label="left" if d.label == "right" else "right") for d in dets]
+                hands = tracker.update(t, dets)
                 self.on_frame(Frame(t=t, fps=fps, hands=hands, source="webcam"))
                 self._emit_ir(lambda: self._preview(image))
             except Exception:

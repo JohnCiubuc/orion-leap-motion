@@ -383,3 +383,34 @@ def test_detector_timestamps_strictly_increase(monkeypatch):
     stamps = []
     run_source(detect=lambda rgb, t: stamps.append(t) or [], seconds=0.15)
     assert len(stamps) > 3 and all(b > a for a, b in zip(stamps, stamps[1:]))
+
+
+# ── Real-hand findings: swapped hands, upright hand ──────────────────────────
+
+def test_labels_are_swapped_because_the_image_is_mirrored():
+    det = project(facing(side="right", extended={"index", "middle"}))  # MediaPipe called this hand "right"
+    _, frames, _ = run_source(detect=lambda rgb, t: [det])
+    assert {h.side for f in frames for h in f.hands} == {"left"}
+    _, frames, _ = run_source(detect=lambda rgb, t: [det], cfg={**WEBCAM_CFG, "mirror": False})
+    assert {h.side for f in frames for h in f.hands} == {"right"}
+
+
+UPRIGHT = Cam(hand_mm=64, tilt_deg=90)
+
+
+def test_upright_hand_becomes_a_flat_hand_but_keeps_its_position():
+    h = facing(extended={"index", "middle"}, palm=(40, 230, 0))
+    flat, upright = landmarks_to_hand(project(h), UPRIGHT), convert(h)
+    assert flat.normal == pytest.approx((0, -1, 0), abs=0.1) and flat.direction == pytest.approx((0, 0, -1), abs=0.1)
+    assert flat.palm == pytest.approx(upright.palm, abs=0.01)  # moving the hand up still moves it up
+    assert flat["middle"].tip[2] < flat.palm[2] - 80  # fingers now point away from the user
+    assert flat.extended == upright.extended
+
+
+def test_oriondo_steers_with_an_upright_hand():
+    r = Rig()
+    r.tr = HandTracker(UPRIGHT)
+    r.show(peace(), 0.6)
+    evs = r.show(peace(220), 0.5)
+    assert [e.value["hover"] for e in evs if e.phase == "update"][-1] == 0
+    assert [p for p, _ in key(r.show(peace(250), 0.5))] == ["fire", "end"]
