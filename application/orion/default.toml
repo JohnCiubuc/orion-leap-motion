@@ -2,13 +2,23 @@
 # Location: ~/.config/orion-renewal/config.toml
 
 [general]
-source = "leap"          # leap | demo
+source = "leap"          # leap | webcam | demo
 engage_required = false  # require the "engage" gesture (open palm toward screen) before each gesture
 engage_window = 2.0      # seconds a gesture may follow "engage"
 ir_fps = 30              # raw IR stream rate in the dashboard
 port = 0                 # local UI port (0 = random free port)
 auto_wake = 10           # restart the controller after this many seconds without frames (0 = off)
 preferred_hand = "left"  # side a new hand gets until the tracker is sure: left | right | none
+
+# Webcam source (general.source = "webcam"); needs `pip install -e ".[webcam]"`.
+[webcam]
+device = "auto"          # auto | /dev/videoN
+width = 640
+height = 480
+fps = 30
+mirror = true            # flip the image so moving your hand right moves it right
+hand_mm = 95             # wrist to middle-knuckle length, used to estimate distance from the camera
+fov_deg = 70             # the camera's horizontal field of view
 
 # Gesture overlay: a translucent card in a corner of the focused monitor (layer-shell, click-through).
 [overlay]

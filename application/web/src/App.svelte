@@ -67,7 +67,7 @@
         {#if !orion.connected}Reconnecting to engine…
         {:else if asleep}Controller asleep
         {:else if s.connected}{s.source === "leap" ? "Leap Motion" : s.source} · {Math.round(orion.fps)} fps
-        {:else}No device found{/if}
+        {:else}{s.error || "No device found"}{/if}
       </div>
       {#if asleep || (orion.connected && s.source === "leap" && !s.connected)}
         <button class="wake" onclick={() => send("restart_device")}><RotateCcw size={14} /> Restart controller</button>

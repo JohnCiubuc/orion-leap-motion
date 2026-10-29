@@ -1297,3 +1297,12 @@ def test_engine_pausing_with_the_menu_open_blocks_the_item(monkeypatch):
     e.router.paused = True
     _menu_frames(e, index_hand(0, 240, side="left"), 3, 0.6)
     assert _op_names(e) == ["open", "close"] and [r for r in e.ran if r[0] == "input.keys"] == []
+
+
+# ── Webcam config ─────────────────────────────────────────────────────────────
+
+def test_config_carries_webcam_defaults(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text('[general]\nsource = "webcam"\n')
+    cfg = Config(path)
+    assert cfg["webcam"]["device"] == "auto" and cfg["webcam"]["mirror"] is True

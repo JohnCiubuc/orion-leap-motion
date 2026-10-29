@@ -12,6 +12,7 @@ dependencies = ["numpy", "aiohttp", "PySide6>=6.8", "evdev", "jeepney", "tomlkit
 
 [project.optional-dependencies]
 dev = ["pytest"]
+webcam = ["mediapipe"]
 
 [project.scripts]
 orion-renewal = "orion.app:main"
