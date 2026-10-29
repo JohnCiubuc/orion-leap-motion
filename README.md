@@ -89,6 +89,21 @@ is a preservation copy so the Quickstart above keeps working either way.
 anything newer, e.g. Ubuntu 24.04's Python 3.12, you need to build it yourself
 as above. It just works once you do; no code changes needed.)
 
+## Webcam instead of a Leap
+
+Orion Renewal can use a plain webcam as the tracking source (MediaPipe hand landmarks, about 30 fps):
+
+```sh
+pip install -e "application[webcam]"        # adds mediapipe + OpenCV
+# ~/.config/orion-renewal/config.toml
+#   [general]  source = "webcam"
+#   [webcam]   device = "auto"   # or "/dev/video2"; Settings → Tracking source lists the detected cameras
+```
+
+The first start downloads Google's `hand_landmarker.task` (about 7 MB) to `~/.cache/orion-renewal/`. Restart after
+changing the source. Limits: distance is estimated from how big the hand looks, so zoom and swipe lengths are
+approximate; the fingertip is noisier than the Leap's, so OrionDo may want a larger `deadzone`/`tap_trigger`.
+
 ## Arch Linux + Wayland (Hyprland) notes
 
 - **Packaging, not `dpkg`.** Arch has no `dpkg`/`apt`, and extracting a `.deb`

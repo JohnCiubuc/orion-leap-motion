@@ -65,3 +65,41 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
 
+
+---
+
+# Project notes: OrionDo (resume here)
+
+Last updated 2026-10-28. OrionDo is merged to `master` and pushed (head `4d615d8`). The webcam source is on branch `webcam-source` (not merged).
+
+## What it is
+**OrionDo** = a Kando-style radial menu for the Orion Leap Motion app, driven by the **index fingertip** (not the OS cursor). Peace sign (held ~0.3 s) opens an animated pie centred on the focused monitor; moving the fingertip past `deadzone` (8 mm) hovers a slice; pulling to `pull` (35 mm) fires it. Firing is by movement only. A fingertip tap at the centre, or losing the hand for 1.5 s, closes it. Default items press `1`–`4` via the `input.keys` action (uinput). Wanted later: submenus, launching apps, macros.
+
+## Where things live
+- **Engine** (`application/orion/`): `gestures/oriondo.py` (state machine, event shapes `begin/update/fire/end`, `allow()` re-checked every frame), `engine.py` (`_oriondo`, `_menu_ok`, `_menu_close`, runs the fired item's action via the Executor), `overlay.py` (`menu()` throttles updates to ~60 Hz, `ready`), `menu_anim.py` (pure animation model), `overlay_menu.py` (GTK/cairo pie window, pie-sized unanchored layer-shell surface, namespace `orion-menu`), `overlay_gtk.py` (routes `{"type":"menu"}`), `default.toml` (`[gestures.oriondo]` + `[[gestures.oriondo.items]]`).
+- **Web UI** (`application/web/src/`): `views/OrionDo.svelte` (page + settings), `components/MenuWheel.svelte` (SVG wheel: select/drag/keyboard), `components/ItemInspector.svelte`, `lib/menu.js` (pure tree ops + geometry, takes a `path` so submenus fit later), `lib/menu.test.js`. Edits go through the shared `orion.draft` → save bar → `save_config` flow.
+- **Config**: items are `{label, action, args}`, list order = clockwise position from the top, equal spacing; a submenu later = an `items` list inside an item. User config is `~/.config/orion-renewal/config.toml` (the user's own menu is customised: Anki ratings; backup at `config.toml.bak-oriondo`). `Config` does not merge new defaults into an existing file, so a config without `[gestures.oriondo]` has no menu (the UI offers "Load the default menu").
+- **Webcam source** (`application/orion/webcam.py`, tests `tests/test_webcam.py`): `landmarks_to_hand` (pure MediaPipe → `Hand`, Leap axes/mm), `HandTracker` (ids, finger debounce, One-Euro smoothing, 0.08 s dropout hold, separate slow depth filter), `WebcamSource` (capture loop, camera auto-detect from `/sys/class/video4linux`, empty frames while the camera stalls). Config `[webcam]`; Settings has a camera select. Spec/plan: `docs/superpowers/{specs,plans}/2026-10-28-webcam-source*`.
+- Specs/plans (read these for intent): `docs/superpowers/specs/2026-10-27-oriondo-design.md`, `…-oriondo-ui-design.md`, `docs/superpowers/plans/2026-10-27-oriondo.md`, `…-oriondo-ui.md`.
+
+## Run / test
+- Python: `cd application && python -m pytest tests/test_core.py -q` (131 pass). Web: `cd application/web && npm test` (11 pass, Node's built-in runner) and `npm run build` (writes git-ignored `application/orion/web`, which the app serves).
+- Launcher `~/.local/bin/orion-renewal` is an editable install of this repo (`/home/inathero/Gits/...` is the same dir as `/fast/Gits/...`). `--demo --headless` prints the UI URL without opening a window.
+- Handy verification trick used here: headless Chromium (`chromium --headless --remote-debugging-port=… --force-prefers-reduced-motion`) driven over the DevTools protocol with `node` (built-in `WebSocket`) to send real mouse/key events and read the DOM, against a demo engine with `XDG_CONFIG_HOME` pointing at a temp copy of the config. The scripts were throwaway (not in the repo). Never click the inspector's **Test** button in automation: it runs a real action on the focused window.
+
+## Decisions worth remembering
+- Tap detection feeds `FingerMotion` the **index tip only** (dropping the peace pose curls the middle finger and read as a tap).
+- A hand returning after >0.15 s out of view **re-anchors** the marker at the centre (otherwise it could fire at once). The menu closes without firing if it stops being allowed (paused, exclusive mode, overlay gone).
+- Pie window is pie-sized, not monitor-sized (28 % → ~11 % of a core at 4K).
+- Gestures page "Reset all" skips OrionDo (it is not a listed family there).
+- Pose `peace` is also bound to right-click in the exclusive mouse modes; OrionDo stays out of exclusive modes.
+
+## Pending (nothing unfinished; all of this is optional follow-up)
+Closed by the user 2026-10-28 (not fixed, just dropped): former items 1-3 (real-hand tuning, other gestures co-firing while the pie is open, small UI fixes: drag tween restart / focus after deleting last slice / second pointer).
+4. Minor engine: update throttle can drop the last 16 ms before a fire; `_menu_open` touched from two threads unlocked; `OverlayHost.send` is a blocking pipe write (pre-existing pattern); marker dot can cover a slice label; README `layerrule` examples omit the `orion-menu` namespace.
+5. Minor UI: a11y (12 tab stops, shortcuts undiscoverable, warning dot not in `aria-label`, CSS animations ignore reduced motion); `fitLabel` cuts by code point; slider nudge off/on dirties the draft; clean state push rebuilds the wheel; unknown action shows "No settings"; trigger missing from the choice list shows a blank select.
+7. **Webcam real-hand tuning** (needs the user): constants in `webcam.py` marked `shortcut:` (`EXTEND_ON/OFF`, `GRAB_*`, `MIN_CUTOFF/BETA/DEPTH_CUTOFF`, `HOLD`), `mirror`, and OrionDo `deadzone`/`tap_trigger` on a webcam. `_mediapipe_detector` API names were unverified until the first real run.
+6. **Roadmap**: submenus (UI path/breadcrumb + engine support), launch-app and macro actions (macros need a step-list args editor in `ArgsEditor`).
+
+## How we have been working
+Superpowers flow: brainstorm (classify, one question at a time, sectioned design) → written spec → plan → execute. The user chose **native** (inline) execution both times, with one fresh most-capable reviewer on the whole branch at the end; fixes are TDD (test fails first). Feature work goes on a branch; after review the user says "merge and push" and wants `master` pushed. Commit/push only when asked.
