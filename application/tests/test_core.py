@@ -905,7 +905,7 @@ def key_events(evs):
 
 def test_oriondo_opens_on_trigger_pose():
     evs, _ = feed(menu(), 0.0, PEACE(), 50)
-    assert key_events(evs) == [("begin", {"labels": ["1", "2", "3", "4"]})]
+    assert key_events(evs) == [("begin", {"labels": ["1", "2", "3", "4"], "subs": [False] * 4, "skin": "aurora"})]
     assert {e.name for e in evs} == {"oriondo"} and {e.hand for e in evs} == {"right"}
 
 
@@ -1318,3 +1318,103 @@ def test_save_adds_a_new_top_level_table_and_keeps_comments(tmp_path):
     text = path.read_text()
     assert "# my note" in text and "# inline note" in text
     assert tomllib.loads(text)["general"]["source"] == "webcam" and tomllib.loads(text)["webcam"]["device"] == "auto"
+
+
+# ── OrionDo: submenus ─────────────────────────────────────────────────────────
+
+def sub(label="S", n=3, **extra):
+    return {"label": label, "items": menu_items(n), **extra}
+
+
+def at(origin, deg, mm):  # index hand `mm` from `origin` (x, y), `deg` clockwise from the top
+    return index_hand(origin[0] + mm * math.sin(math.radians(deg)), origin[1] + mm * math.cos(math.radians(deg)))
+
+
+def entered(items=None):
+    """A menu with the submenu in slice 0, pulled open from the top: (gesture, enter events, next t, new origin)."""
+    g = menu(items or [sub(), *menu_items(1)])
+    evs, t = feed(g, opened(g), polar(0, 36), 1)
+    return g, evs, t, (0, 236)
+
+
+def test_slot_angles_layout():
+    from orion.gestures.oriondo import slot_angles
+    assert slot_angles(4, None) == [0, 90, 180, 270]
+    assert slot_angles(3, 180) == pytest.approx([270, 0, 90])
+    assert slot_angles(2, 90) == pytest.approx([210, 330])
+    assert slot_angles(1, 0) == pytest.approx([180])
+
+
+def test_oriondo_enter_submenu_instead_of_firing():
+    _, evs, _, _ = entered()
+    assert [p for p, _ in key_events(evs)] == ["enter"]
+    v = key_events(evs)[0][1]
+    assert v["labels"] == ["1", "2", "3"] and v["back"] == 180 and v["depth"] == 1 and v["parent"] == "S"
+
+
+def test_oriondo_enter_reanchors_and_cannot_refire():
+    g, _, t, o = entered()
+    evs, _ = feed(g, t, index_hand(*o), 30)
+    assert key_events(evs) == [] and all(e.value["hover"] is None for e in evs)
+
+
+def test_oriondo_submenu_child_hovers_by_its_angle_and_fires():
+    g, _, t, o = entered()
+    assert last(feed(g, t, at(o, 0, 12), 3)[0])["hover"] == 1  # straight on: the middle of three children
+    assert last(feed(g, t + 0.03, at(o, 90, 12), 3)[0])["hover"] == 2
+    evs, _ = feed(g, t + 0.06, at(o, 0, 40), 1)
+    assert [p for p, _ in key_events(evs)] == ["fire", "end"] and key_events(evs)[0][1]["index"] == 1
+
+
+def test_oriondo_back_gap_hover_and_back():
+    g, _, t, o = entered()
+    assert last(feed(g, t, at(o, 180, 12), 3)[0])["hover"] == -1
+    evs, _ = feed(g, t + 0.03, at(o, 180, 40), 1)
+    assert [p for p, _ in key_events(evs)] == ["back"]
+    v = key_events(evs)[0][1]
+    assert v["depth"] == 0 and v["back"] is None and v["away"] == 180 and v["labels"] == ["S", "1"]
+
+
+def test_oriondo_back_to_nested_parent():
+    g = menu([{"label": "A", "items": [sub("B", 3)]}])
+    t = opened(g)
+    _, t = feed(g, t, polar(0, 36), 1)  # into A: its only child B sits straight up
+    evs, t = feed(g, t, at((0, 236), 0, 36), 1)  # into B
+    assert key_events(evs)[0][1]["depth"] == 2
+    evs, _ = feed(g, t, at((0, 272), 180, 36), 1)
+    v = key_events(evs)[0][1]
+    assert key_events(evs)[0][0] == "back" and v["depth"] == 1 and v["back"] == 180 and v["away"] == 180
+
+
+def test_oriondo_empty_or_malformed_submenu_is_inert():
+    g = menu([{"label": "E", "items": []}, {"label": "M", "items": "x"}, *menu_items(1)])
+    t = opened(g)
+    for deg in (0, 120):
+        evs, t = feed(g, t, polar(deg, 36), 3)
+        assert key_events(evs) == []
+    evs, _ = feed(g, t, polar(240, 36), 1)
+    assert [p for p, _ in key_events(evs)] == ["fire", "end"]
+    g2 = menu([{"label": "B", "action": "input.keys", "args": {}, "items": menu_items(2)}])
+    evs, _ = feed(g2, opened(g2), polar(0, 36), 1)
+    assert [p for p, _ in key_events(evs)] == ["enter"]
+
+
+def test_oriondo_lost_hand_inside_submenu_closes_everything():
+    g, _, t, _ = entered()
+    evs, _ = feed(g, t, None, 160)
+    assert key_events(evs) == [("end", "lost")]
+
+
+def test_oriondo_centre_tap_inside_submenu_closes_everything():
+    g, _, t, o = entered()
+    _, t = feed(g, t, index_hand(*o), 30)
+    evs = [e for i in range(8) for e in feed(g, t + i / 100, index_hand(o[0], o[1], dip=i * 1.5))[0]]
+    assert key_events(evs) == [("end", "tap")]
+
+
+def test_oriondo_returning_far_away_in_a_submenu_does_not_back_or_fire():
+    g, _, t, o = entered()
+    _, t = feed(g, t, index_hand(*o), 10)
+    _, t = feed(g, t, None, 50)
+    evs, _ = feed(g, t, at(o, 180, 42), 5)
+    assert key_events(evs) == [] and last(evs)["hover"] is None
