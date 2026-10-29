@@ -6,13 +6,17 @@
   import { SvelteMap } from "svelte/reactivity";
   import { Tween } from "svelte/motion";
   import { Plus } from "@lucide/svelte";
-  import { MAX_ITEMS, arcPath, sliceCenter, dragSlot, fitLabel } from "../lib/menu.js";
+  import { MAX_ITEMS, arcPath, slotCenter, slotLayout, dragSlot, fitLabel, isSubmenu, hasChildren } from "../lib/menu.js";
   import { actionMeta } from "../lib/link.svelte.js";
 
-  let { items, selected = -1, onselect, onmove, onadd, onremove, onenter } = $props();
+  // `back` is the angle (degrees) of the slot facing the parent when this is a submenu (null at the root); that slot is
+  // drawn as the parent's ghost and clicking it goes up. `onopen(i)` descends into a submenu slice, `onup()` goes back.
+  let { items, selected = -1, back = null, parentLabel = "", onselect, onmove, onadd, onremove, onenter, onopen, onup } = $props();
 
   const R_IN = 60, R_OUT = 160, HUB = 34, HALF = 200, LIFT = 6; // viewBox spans ±HALF
   const TAU = 2 * Math.PI;
+  const off = $derived(slotLayout(items.length, back).offset); // 1 in a submenu: the gap takes slot 0
+  const rot = $derived(back == null ? 0 : (back * Math.PI) / 180);
   const opts = { duration: matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 200, easing: cubicOut };
 
   const count = new Tween(Math.max(items.length, 1), opts); // slice count, fractional while the wheel re-lays out (starts settled: no intro)
@@ -56,8 +60,9 @@
     if (!press || n < 2 || (!drag && Math.hypot(e.clientX - press.x, e.clientY - press.y) < 6)) return;
     const r = svg.getBoundingClientRect(), k = (2 * HALF) / r.width;
     const x = (e.clientX - r.left - r.width / 2) * k, y = (e.clientY - r.top - r.height / 2) * k;
-    const angle = (Math.atan2(x, -y) + TAU) % TAU;
-    drag = { from: press.i, slot: dragSlot(x, y, n, HUB, drag?.slot ?? press.i), pos: angle / (TAU / n) };
+    const angle = (Math.atan2(x, -y) + TAU - rot) % TAU;
+    const pos = Math.min(Math.max(angle / (TAU / (n + off)) - off, 0), n - 1 + 0.5);
+    drag = { from: press.i, slot: dragSlot(x, y, n, HUB, drag?.slot ?? press.i, back), pos };
   }
   function up() {
     const d = drag;
@@ -92,7 +97,8 @@
     } else if (e.key === "Enter") {
       e.preventDefault();
       onselect(i);
-      onenter?.();
+      if (isSubmenu(items[i])) onopen?.(i);
+      else onenter?.();
     } else if (e.key === " ") {
       e.preventDefault();
       onselect(i);
@@ -100,7 +106,11 @@
   }
 </script>
 
-<svelte:window onkeydown={(e) => e.key === "Escape" && drag && cancel()} />
+<svelte:window onkeydown={(e) => {
+  if (e.defaultPrevented || e.target.closest?.("input, select, textarea")) return;
+  if (e.key === "Escape") drag ? cancel() : onup?.();
+  else if (e.key === "Backspace" && selected < 0) onup?.();
+}} />
 
 <svg bind:this={svg} viewBox="{-HALF} {-HALF} {2 * HALF} {2 * HALF}" role="group" aria-label="Menu wheel">
   {#if !items.length}
@@ -110,22 +120,37 @@
   {/if}
   {#each items as item, i (idOf(item))}
     {@const p = pos(item, i)}
-    {@const c = sliceCenter(p, count.current)}
+    {@const c = slotCenter(p + off, count.current + off, rot)}
     <g class="slice" class:sel={selected === i} class:dragging={drag?.from === i} data-i={i} role="button" tabindex="0"
-       aria-label="Slice {i + 1}: {item.label}" aria-pressed={selected === i}
+       aria-label="Slice {i + 1}: {item.label}{isSubmenu(item) ? ' (submenu)' : ''}" aria-pressed={selected === i}
        style:--dx="{Math.sin(c) * LIFT}px" style:--dy="{-Math.cos(c) * LIFT}px"
        onpointerdown={(e) => down(e, i)} onpointermove={move} onpointerup={up} onpointercancel={cancel}
-       onkeydown={(e) => key(e, i)}>
-      <title>{item.label || "(no label)"} · {item.action || "no action"}</title>
-      <path d={arcPath(p, count.current, R_IN, R_OUT)} />
+       ondblclick={() => isSubmenu(item) && onopen?.(i)} onkeydown={(e) => key(e, i)}>
+      <title>{item.label || "(no label)"} · {isSubmenu(item) ? `submenu, ${item.items.length} items` : item.action || "no action"}</title>
+      <path d={arcPath(p + off, count.current + off, R_IN, R_OUT, 0, 0, rot)} />
       <text x={Math.sin(c) * (R_IN + R_OUT) / 2} y={-Math.cos(c) * (R_IN + R_OUT) / 2}>{fitLabel(item.label ?? "", items.length)}</text>
-      {#if !actionMeta(item.action)}
-        <circle cx={Math.sin(c) * (R_OUT - 14)} cy={-Math.cos(c) * (R_OUT - 14)} r="5" class="warn">
-          <title>{item.action ? "Unknown action, is its plugin loaded?" : "No action chosen"}</title>
+      {#if isSubmenu(item)}
+        <path class="chevron" d="M -3 -4 L 3 0 L -3 4"
+              transform="translate({Math.sin(c) * (R_OUT - 14)} {-Math.cos(c) * (R_OUT - 14)}) rotate({(c * 180) / Math.PI - 90})" />
+      {/if}
+      {#if isSubmenu(item) ? !hasChildren(item) : !actionMeta(item.action)}
+        <circle cx={Math.sin(c) * (R_OUT - 30)} cy={-Math.cos(c) * (R_OUT - 30)} r="5" class="warn">
+          <title>{isSubmenu(item) ? "Empty submenu: pulling it does nothing" : item.action ? "Unknown action, is its plugin loaded?" : "No action chosen"}</title>
         </circle>
       {/if}
     </g>
   {/each}
+  {#if back != null}
+    {@const gx = Math.sin(rot) * (R_IN + R_OUT) / 2}
+    {@const gy = -Math.cos(rot) * (R_IN + R_OUT) / 2}
+    <line x1="0" y1="0" x2={gx} y2={gy} class="link" />
+    <g class="ghost" role="button" tabindex="0" aria-label="Back to {parentLabel || 'the parent menu'}" onclick={() => onup?.()}
+       onkeydown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), onup?.())}>
+      <title>Back to {parentLabel || "the parent menu"}</title>
+      <circle cx={gx} cy={gy} r="22" />
+      <text x={gx} y={gy}>{[...String(parentLabel ?? "")][0] ?? "↩"}</text>
+    </g>
+  {/if}
   {#if items.length}<circle r={HUB} class="hub" />{/if}
 </svg>
 
@@ -149,6 +174,12 @@
   text.hint { font-size: 15px; }
   text.sub { font: 400 12px var(--ui); fill: var(--dust); }
   .warn { fill: var(--warn); stroke: var(--void); stroke-width: 1.5; }
+  .chevron { fill: none; stroke: var(--rigel); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
+  .link { stroke: var(--line); stroke-width: 2; pointer-events: none; }
+  .ghost { cursor: pointer; outline: none; }
+  .ghost circle { fill: var(--slice, #0e1229); stroke: var(--line); stroke-width: 1.5; transition: fill .15s, stroke .15s; }
+  .ghost:hover circle, .ghost:focus-visible circle { fill: var(--hot, #335e9e); stroke: var(--rigel); filter: drop-shadow(0 0 6px #8fc7ff66); }
+  .ghost text { font-size: 14px; }
   .hub { fill: var(--void); stroke: var(--line); stroke-width: 1.5; pointer-events: none; }
   .empty-ring { fill: none; stroke: var(--line); stroke-width: 1.5; stroke-dasharray: 6 6; }
   .foot { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 12px; }

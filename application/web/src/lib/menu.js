@@ -38,8 +38,14 @@ export function sliceAt(x, y, n, rIn) {
   return Math.floor((angleOf(x, y) + w / 2) / w) % n;
 }
 
-/** The slot a dragged slice is over; near the hub the angle is noise, so it keeps where it was. */
-export const dragSlot = (x, y, n, rIn, prev) => sliceAt(x, y, n, rIn) ?? prev;
+/** The slot a dragged slice is over; near the hub (or the back gap) the angle is meaningless, so it keeps where it was. */
+export function dragSlot(x, y, n, rIn, prev, back = null) {
+  if (back == null) return sliceAt(x, y, n, rIn) ?? prev;
+  if (Math.hypot(x, y) < rIn) return prev;
+  const w = (2 * Math.PI) / (n + 1);
+  const slot = Math.floor(((angleOf(x, y) - (back * Math.PI) / 180 + 2 * Math.PI) % (2 * Math.PI) + w / 2) / w) % (n + 1);
+  return slot === 0 ? prev : slot - 1;
+}
 
 // ── Tree operations ──
 

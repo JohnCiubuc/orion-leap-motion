@@ -3,34 +3,49 @@
   import Switch from "../components/Switch.svelte";
   import MenuWheel from "../components/MenuWheel.svelte";
   import ItemInspector from "../components/ItemInspector.svelte";
+  import Breadcrumb from "../components/Breadcrumb.svelte";
   import { RotateCcw } from "@lucide/svelte";
   import { orion } from "../lib/link.svelte.js";
-  import { addItem, blankItem, moveItem, removeItem, selectionAfterMove, selectionAfterRemove } from "../lib/menu.js";
+  import {
+    addItem, backAt, blankItem, canNest, clampPath, crumbs, isSubmenu, listAt, moveItem, removeItem, selectionAfterMove,
+    selectionAfterRemove,
+  } from "../lib/menu.js";
 
   const present = $derived(orion.gestures.some((g) => g.name === "oriondo"));
   const conf = () => ((orion.draft.gestures.oriondo ??= {}), orion.draft.gestures.oriondo); // reactive proxy, created on first edit
   const list = () => (conf().items ??= []);
-  const items = $derived(orion.draft?.gestures?.oriondo?.items ?? []);
+  const root = $derived(orion.draft?.gestures?.oriondo?.items ?? []);
+  let path = $state([]); // indices of the submenus being edited; [] is the root menu
+  const here = $derived(clampPath(root, path)); // a discarded draft, a reset or a conversion can remove the level under us
+  const items = $derived(listAt(root, here) ?? []);
+  const back = $derived(backAt(root, here));
+  const trail = $derived(crumbs(root, here));
   const enabled = $derived(orion.draft?.gestures?.oriondo?.enabled ?? true);
   const shipped = $derived(orion.gestureDefaults.oriondo?.items);
   let sel = $state(-1);
   $effect(() => { // a discarded draft or a reload can shorten the list under the selection
     if (sel >= items.length) sel = items.length - 1;
   });
+  $effect(() => {
+    if (here.length !== path.length) path = here;
+  });
+  const goto = (p) => ((path = p), (sel = -1));
+  const open = (i) => isSubmenu(items[i]) && goto([...here, i]);
+  const up = () => here.length && goto(here.slice(0, -1));
 
   function add() {
-    const l = list(), at = sel >= 0 ? sel + 1 : l.length;
-    if (addItem(l, [], blankItem(l, []), at)) sel = at;
+    const l = list(), at = sel >= 0 ? sel + 1 : listAt(l, here).length;
+    if (addItem(l, here, blankItem(l, here), at)) sel = at;
   }
   function remove(i) {
-    removeItem(list(), [], i);
-    sel = selectionAfterRemove(sel, i, list().length);
+    removeItem(list(), here, i);
+    sel = selectionAfterRemove(sel, i, listAt(list(), here).length);
   }
   function move(from, to) {
-    moveItem(list(), [], from, to);
+    moveItem(list(), here, from, to);
     sel = selectionAfterMove(sel, from, to);
   }
-  const loadDefaults = () => (conf().items = structuredClone($state.snapshot(shipped)));
+  const loadDefaults = () => ((conf().items = structuredClone($state.snapshot(shipped))), goto([]));
   const menuModified = $derived(JSON.stringify($state.snapshot(items)) !== JSON.stringify($state.snapshot(shipped ?? [])));
   let labelField = $state(); // the inspector's label input, so Enter on a slice can jump to it
 
@@ -91,8 +106,9 @@
 {:else if orion.draft}
   <div class="cols">
     <section class="panel wheel" class:off={!enabled}>
-      <MenuWheel {items} selected={sel} onselect={(i) => (sel = i)} onmove={move} onadd={add} onremove={remove}
-                 onenter={() => labelField?.focus()} />
+      <Breadcrumb crumbs={trail} onpick={goto} />
+      <MenuWheel {items} {back} parentLabel={trail[trail.length - 1].label} selected={sel} onselect={(i) => (sel = i)} onmove={move}
+                 onadd={add} onremove={remove} onenter={() => labelField?.focus()} onopen={open} onup={up} />
       {#if !items.length && shipped?.length}
         <p class="load"><button onclick={loadDefaults}>Load the default menu</button></p>
       {:else if shipped?.length}
@@ -102,7 +118,8 @@
     <div class="side">
       <section class="panel box">
         <h2>{sel >= 0 ? `Slice ${sel + 1}` : "Slice"}</h2>
-        <ItemInspector item={items[sel]} onremove={() => remove(sel)} bind:inputref={labelField} />
+        <ItemInspector item={items[sel]} onremove={() => remove(sel)} onopen={() => open(sel)} canNest={canNest(here)}
+                       bind:inputref={labelField} />
       </section>
       <section class="panel box params">
         <div class="head">

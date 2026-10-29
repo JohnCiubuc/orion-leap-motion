@@ -185,3 +185,13 @@ test("canNest stops at the depth limit and nested lists still cap at 12", () => 
   assert.equal(addItem(tree, [0], items("x")[0]), false);
   assert.equal(addItem(tree, [], items("y")[0]), true);
 });
+
+test("dragSlot works inside a submenu: children skip the back gap", () => {
+  // three children, back at 180°: children at 270°, 0°, 90°; the gap faces down
+  assert.equal(dragSlot(...at(0), 3, 30, 1, 180), 1);
+  assert.equal(dragSlot(...at(90), 3, 30, 0, 180), 2);
+  assert.equal(dragSlot(...at(270), 3, 30, 2, 180), 0);
+  assert.equal(dragSlot(...at(180), 3, 30, 2, 180), 2); // over the gap: keeps where it was
+  assert.equal(dragSlot(0, 0, 3, 30, 1, 180), 1); // inside the hub too
+  assert.equal(dragSlot(...at(120), 4, 30, 0), 1); // the root behaves as before
+});
