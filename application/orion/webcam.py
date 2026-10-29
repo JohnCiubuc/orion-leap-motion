@@ -31,6 +31,8 @@ DEBOUNCE = 2  # frames a finger must hold a new state before it flips
 HOLD = 0.08  # s a missed hand is repeated, so one lost detection doesn't read as the hand leaving
 MIN_CUTOFF, BETA, D_CUTOFF, DEPTH_CUTOFF = 1.5, 0.02, 1.0, 0.4  # shortcut: One-Euro settings guessed from synthetic jitter, retune on a real hand
 MATCH_DISTANCE = 0.25  # normalised image distance within which a detection continues a track
+PINCH_OPEN, PINCH_CLOSED = 60.0, 10.0  # mm between thumb and index tips for pinch 0 and 1
+GRAB_OPEN, GRAB_CLOSED = 0.85, 0.60  # finger straightness for grab 0 and 1; shortcut: from synthetic hands, retune on a real hand
 EXTEND_ON, EXTEND_OFF = 0.80, 0.65  # shortcut: finger straightness cut-offs picked from synthetic hands, retune on a real hand
 
 
@@ -48,6 +50,10 @@ class Detection:
     world: np.ndarray  # (21, 3) metres, hand-centred, y down, z away from the camera
     label: str  # "left" | "right" (the user's real hand: frames are mirrored before detection)
     score: float
+
+
+def _unit(v: np.ndarray) -> np.ndarray:
+    return (v / (np.linalg.norm(v) or 1.0)).astype(np.float32)
 
 
 def _extended(straightness: float, was: bool) -> bool:
@@ -86,13 +92,18 @@ def landmarks_to_hand(det: Detection, cam: Cam, prev_extended: frozenset[str] = 
                      z - NOMINAL_DISTANCE), np.float32)
     w = det.world * (1000, -1000, 1000)  # hand shape in real mm, y up
     w = w - w[list(PALM_LM)].mean(axis=0) + palm
-    fingers = []
+    fingers, straight = [], []
     for k, name in enumerate(FINGERS):
         pts = w[4 * k + 1:4 * k + 5]
+        straight.append(_straightness(pts))
         joints = np.vstack((w[0], pts)).astype(np.float32)
-        fingers.append(Finger(name, _extended(_straightness(pts), name in prev_extended), joints))
-    return Hand(hid, det.label, det.score, 0.0, 0.0, palm, palm.copy(), np.zeros(3, np.float32),
-                np.array((0, -1, 0), np.float32), np.array((0, 0, -1), np.float32), tuple(fingers))
+        fingers.append(Finger(name, _extended(straight[-1], name in prev_extended), joints))
+    pinch = min(max((PINCH_OPEN - float(np.linalg.norm(w[4] - w[8]))) / (PINCH_OPEN - PINCH_CLOSED), 0.0), 1.0)
+    grab = float(np.mean([min(max((GRAB_OPEN - s) / (GRAB_OPEN - GRAB_CLOSED), 0.0), 1.0) for s in straight[1:]]))
+    normal = np.cross(w[5] - w[0], w[17] - w[0]) * (-1 if det.label == "left" else 1)
+    direction = w[9] - w[0]
+    return Hand(hid, det.label, det.score, pinch, grab, palm, palm.copy(), np.zeros(3, np.float32),
+                _unit(normal), _unit(direction), tuple(fingers))
 
 
 def _alpha(cutoff, dt):
@@ -159,12 +170,14 @@ class HandTracker:
             tr.flip[f.name] = tr.flip[f.name] + 1 if f.extended != (f.name in tr.extended) else 0
             if tr.flip[f.name] >= DEBOUNCE:
                 tr.extended, tr.flip[f.name] = tr.extended ^ {f.name}, 0
-        v = tr.filter(t, np.concatenate((raw.palm, np.stack([f.joints for f in raw.fingers]).ravel())))
+        v = tr.filter(t, np.concatenate((raw.palm, np.stack([f.joints for f in raw.fingers]).ravel(),
+                                         (raw.pinch, raw.grab), raw.normal, raw.direction)))
         palm = v[:3].astype(np.float32)
         fingers = tuple(Finger(f.name, f.name in tr.extended, v[3 + 15 * k:18 + 15 * k].reshape(5, 3).astype(np.float32))
                         for k, f in enumerate(raw.fingers))
         return dataclasses.replace(raw, palm=palm, stable=palm.copy(), velocity=tr.filter.dx[:3].astype(np.float32),
-                                   fingers=fingers)
+                                   pinch=float(min(max(v[78], 0), 1)), grab=float(min(max(v[79], 0), 1)),
+                                   normal=_unit(v[80:83]), direction=_unit(v[83:86]), fingers=fingers)
 
 
 # ── Source ────────────────────────────────────────────────────────────────────

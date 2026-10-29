@@ -304,3 +304,47 @@ def test_ensure_model_downloads_once_and_leaves_no_partial_file(tmp_path):
     with pytest.raises(RuntimeError):
         ensure_model(bad, (tmp_path / "missing").as_uri())
     assert not bad.exists() and not list((tmp_path / "cache").glob("*.tmp"))
+
+
+# ── Milestone 2: the other Hand fields and poses ─────────────────────────────
+
+def pinched(hand):
+    hand.fingers[0].joints[-1] = hand["index"].tip.copy()  # thumb tip on the index tip
+    return hand
+
+
+def convert(hand):
+    return landmarks_to_hand(project(hand), CAM)
+
+
+def test_pinch_and_grab():
+    assert convert(pinched(facing(extended={"middle", "ring", "pinky"}))).pinch > 0.85
+    assert convert(facing()).pinch < 0.3
+    assert convert(facing(extended=set())).grab > 0.9 and convert(facing()).grab < 0.2
+
+
+@pytest.mark.parametrize("side", ["right", "left"])
+def test_normal_and_direction(side):
+    h = convert(facing(side=side))
+    assert h.normal == pytest.approx((0, 0, -1), abs=0.1) and h.direction == pytest.approx((0, 1, 0), abs=0.1)
+
+
+WEBCAM_POSES = {
+    "thumbs_up": lambda: facing(extended={"thumb"}, thumb=(0, 1, 0)),
+    "thumbs_down": lambda: facing(extended={"thumb"}, thumb=(0, -1, 0)),
+    "ok": lambda: pinched(facing(extended={"middle", "ring", "pinky"})),
+    "fist": lambda: facing(extended=set()),
+    "open_palm": lambda: facing(),
+    "peace": lambda: facing(extended={"index", "middle"}),
+    "pinch": lambda: pinched(facing(extended={"middle", "ring", "pinky"})),
+    "engage": lambda: facing(),
+}
+
+
+@pytest.mark.parametrize("name", WEBCAM_POSES)
+def test_pose_detected_from_webcam_frames(name):
+    tr, g, seen = HandTracker(CAM), REGISTRY[name](), []
+    for i in range(45):
+        t = i * DT
+        seen += [(e.name, e.phase) for e in g.update(Frame(t=t, hands=tr.update(t, [project(WEBCAM_POSES[name]())]), source="webcam"))]
+    assert (name, "begin") in seen
