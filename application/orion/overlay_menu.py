@@ -5,6 +5,7 @@ engine go to a MenuController (menu_ctl.py); a 16 ms tick asks it for the curren
 unmapped once the pie has collapsed. Skins live in menu_skins/.
 """
 
+import os
 import time
 
 import gi
@@ -74,4 +75,10 @@ class MenuWindow:
         if v is None or not v.visible or not v.slices:
             return
         if not self.ctl.draw(cr, v, w, h):  # a skin that raises must not leave a surface up
-            GLib.idle_add(self.win.set_visible, False)
+            GLib.idle_add(self._draw_failed)
+
+    def _draw_failed(self):
+        self.win.set_visible(False)
+        if self.ctl.broken:  # the default skin failed: nothing can draw the pie, and the engine only knows the overlay is alive.
+            os._exit(3)  # Stopping the process makes it stop offering menus, so a pull can never fire an item nobody can see.
+        return False

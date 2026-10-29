@@ -9,6 +9,7 @@ from .fingers import FingerMotion
 
 HYSTERESIS = 4.0  # degrees past a slice border before the hover switches
 REANCHOR = 0.15  # s without the hand: wherever it comes back becomes the new centre
+TAP_GRACE = 0.15  # s after entering or leaving a submenu in which a fingertip tap is ignored: the pull itself flicks the finger
 
 
 def slot_angles(n: int, back: float | None) -> list[float]:
@@ -43,7 +44,7 @@ class OrionDo(Gesture):
 
     def __init__(self, overrides=None):
         super().__init__(overrides)
-        self.items = list((overrides or {}).get("items") or [])  # not a slider param: the base class drops it
+        self.items = [i for i in (overrides or {}).get("items") or [] if isinstance(i, dict)]  # not a slider param: the base class drops it
         self.skin = str((overrides or {}).get("skin") or "aurora")  # nor is this: the overlay's drawing style
         self.allow = lambda: True  # the engine vetoes opening (paused, exclusive mode, no overlay)
         trigger = REGISTRY.get(self.p["trigger"])
@@ -65,7 +66,7 @@ class OrionDo(Gesture):
         elif opener and frame.t >= self.cool and self.items and self.allow() and frame.hand(opener):
             self.menu = {"side": opener, "origin": frame.hand(opener)["index"].tip[:2].astype(np.float64),
                          "hover": None, "seen": frame.t, "tap": FingerMotion(), "items": self.items, "back": None,
-                         "stack": []}
+                         "stack": [], "grace": 0.0}
             yield GestureEvent(self.name, "begin", {"labels": _labels(self.items), "subs": _subs(self.items),
                                                     "skin": self.skin}, opener, frame.t)
 
@@ -86,8 +87,12 @@ class OrionDo(Gesture):
         v = tip - m["origin"]
         r = float(np.hypot(*v))
         # the index only: dropping the trigger pose curls the other fingers, which must not read as a tap
-        tapped = m["tap"].update(frame.t, np.array([h["index"].tip - h.palm]),
-                                 float(np.linalg.norm(h.velocity)), p["tap_trigger"], p["tap_still"])
+        if frame.t < m["grace"]:  # the pull just flicked the finger: start judging taps from a clean history afterwards
+            m["tap"].reset()
+            tapped = False
+        else:
+            tapped = m["tap"].update(frame.t, np.array([h["index"].tip - h.palm]),
+                                     float(np.linalg.norm(h.velocity)), p["tap_trigger"], p["tap_still"])
         if tapped and r < p["deadzone"]:
             yield self._close(frame, "tap")
             return
@@ -101,8 +106,9 @@ class OrionDo(Gesture):
                 yield GestureEvent(self.name, "fire", {"index": hover, "item": item}, m["side"], frame.t)
                 yield self._close(frame, "fired")
                 return
-            if isinstance(item["items"], list) and item["items"]:
-                yield self._enter(m, tip, frame, hover, item)
+            kids = [k for k in item["items"] if isinstance(k, dict)] if isinstance(item["items"], list) else []
+            if kids:
+                yield self._enter(m, tip, frame, hover, item, kids)
                 return
         progress = min(max((r - p["deadzone"]) / max(p["pull"] - p["deadzone"], 1e-6), 0.0), 1.0)
         value = {"x": float(v[0]) / p["pull"], "y": float(v[1]) / p["pull"], "hover": hover, "pull": progress}
@@ -123,12 +129,12 @@ class OrionDo(Gesture):
 
     def _restart(self, m, tip, frame):
         """New level: the marker measures from where the fingertip is now, with nothing hovered, so it cannot fire at once."""
-        m.update(origin=tip, hover=None, tap=FingerMotion(), seen=frame.t)
+        m.update(origin=tip, hover=None, tap=FingerMotion(), seen=frame.t, grace=frame.t + TAP_GRACE)
 
-    def _enter(self, m, tip, frame, hover, item):
+    def _enter(self, m, tip, frame, hover, item, kids):
         back = (slot_angles(len(m["items"]), m["back"])[hover] + 180) % 360
         m["stack"].append({"items": m["items"], "back": m["back"], "parent": str(item.get("label", ""))})
-        m.update(items=item["items"], back=back)
+        m.update(items=kids, back=back)
         self._restart(m, tip, frame)
         return GestureEvent(self.name, "enter", {"labels": _labels(m["items"]), "subs": _subs(m["items"]), "back": back,
                                                  "depth": len(m["stack"]), "parent": m["stack"][-1]["parent"]}, m["side"], frame.t)

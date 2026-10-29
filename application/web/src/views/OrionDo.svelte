@@ -46,7 +46,7 @@
     sel = selectionAfterMove(sel, from, to);
   }
   const loadDefaults = () => ((conf().items = structuredClone($state.snapshot(shipped))), goto([]));
-  const menuModified = $derived(JSON.stringify($state.snapshot(items)) !== JSON.stringify($state.snapshot(shipped ?? [])));
+  const menuModified = $derived(JSON.stringify($state.snapshot(root)) !== JSON.stringify($state.snapshot(shipped ?? [])));
   let labelField = $state(); // the inspector's label input, so Enter on a slice can jump to it
 
   // ── Settings: ranges, choices and defaults come from the engine's gesture metadata ──
@@ -109,7 +109,8 @@
       <Breadcrumb crumbs={trail} onpick={goto} />
       <MenuWheel {items} {back} parentLabel={trail[trail.length - 1].label} selected={sel} onselect={(i) => (sel = i)} onmove={move}
                  onadd={add} onremove={remove} onenter={() => labelField?.focus()} onopen={open} onup={up} />
-      {#if !items.length && shipped?.length}
+      {#if here.length}<!-- the defaults replace the whole menu: offered at the root only -->
+      {:else if !items.length && shipped?.length}
         <p class="load"><button onclick={loadDefaults}>Load the default menu</button></p>
       {:else if shipped?.length}
         <p class="load"><button class="ghost" onclick={loadDefaults} disabled={!menuModified}><RotateCcw size={13} /> Reset menu to defaults</button></p>

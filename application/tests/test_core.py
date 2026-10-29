@@ -1545,3 +1545,26 @@ def test_anim_reduced_motion_jumps():
     a.enter(["a", "b"], 0.2, 180, "S")
     v = a.step(0.25)
     assert v.pan == (0, 0) and v.leaving == [] and [s.scale for s in v.slices] == pytest.approx([1.0, 1.0])
+
+
+def test_oriondo_non_dict_items_are_dropped():
+    g = menu(["x", 3, *menu_items(2)])
+    assert key_events(feed(g, 0.0, PEACE(), 50)[0]) == [("begin", {"labels": ["1", "2"], "subs": [False, False], "skin": "aurora"})]
+    g = menu([{"label": "S", "items": ["a", 1, {"label": "ok"}]}, *menu_items(1)])
+    evs, _ = feed(g, opened(g), polar(0, 36), 1)
+    assert key_events(evs)[0][1]["labels"] == ["ok"]
+    g = menu([{"label": "S", "items": ["a", "b"]}, *menu_items(1)])
+    t = opened(g)
+    evs, t = feed(g, t, polar(0, 36), 3)
+    assert key_events(evs) == []  # a submenu with nothing usable in it is inert
+    evs, _ = feed(g, t, polar(180, 36), 1)
+    assert [p for p, _ in key_events(evs)] == ["fire", "end"]
+
+
+def test_oriondo_a_flick_right_after_entering_does_not_tap_close():
+    g, _, t, o = entered()
+    evs = [e for i in range(8) for e in feed(g, t + i / 100, index_hand(o[0], o[1], dip=i * 1.5))[0]]
+    assert key_events(evs) == []  # the fingertip springing back as the pie travels is not a tap
+    _, t = feed(g, t + 0.08, index_hand(*o), 30)
+    evs = [e for i in range(8) for e in feed(g, t + i / 100, index_hand(o[0], o[1], dip=i * 1.5))[0]]
+    assert key_events(evs) == [("end", "tap")]  # a real one, later, still closes
