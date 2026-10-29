@@ -5,9 +5,9 @@
   import ItemInspector from "../components/ItemInspector.svelte";
   import Breadcrumb from "../components/Breadcrumb.svelte";
   import { RotateCcw } from "@lucide/svelte";
-  import { orion } from "../lib/link.svelte.js";
+  import { orion, skinPreviewUrl } from "../lib/link.svelte.js";
   import {
-    addItem, backAt, blankItem, canNest, clampPath, crumbs, isSubmenu, listAt, moveItem, removeItem, selectionAfterMove,
+    SKINS, weightOf, addItem, backAt, blankItem, canNest, clampPath, crumbs, isSubmenu, listAt, moveItem, removeItem, selectionAfterMove,
     selectionAfterRemove,
   } from "../lib/menu.js";
 
@@ -45,6 +45,10 @@
     moveItem(list(), here, from, to);
     sel = selectionAfterMove(sel, from, to);
   }
+  function resize(a, b, wa, wb) {
+    items[a].weight = wa;
+    items[b].weight = wb;
+  }
   const loadDefaults = () => ((conf().items = structuredClone($state.snapshot(shipped))), goto([]));
   const menuModified = $derived(JSON.stringify($state.snapshot(root)) !== JSON.stringify($state.snapshot(shipped ?? [])));
   let labelField = $state(); // the inspector's label input, so Enter on a slice can jump to it
@@ -65,8 +69,23 @@
   const title = (n) => n.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
   const value = (k) => orion.draft?.gestures?.oriondo?.[k] ?? params[k]?.[0];
   const step = (range) => (range.every(Number.isInteger) ? 1 : 0.05); // on the slider's grid, so a default like 1.5 shows as 1.5
-  const settingsModified = $derived(Object.keys(params).some((k) => value(k) !== (defaults[k] ?? params[k][0])));
+  const settingsModified = $derived(Object.keys(params).some((k) => value(k) !== (defaults[k] ?? params[k][0])) || skin !== (defaults.skin ?? SKINS[0].id) || hue !== undefined || invert);
+  const skin = $derived(orion.draft?.gestures?.oriondo?.skin ?? SKINS[0].id);
+  const skinHue = $derived(SKINS.find((s) => s.id === skin)?.hue ?? SKINS[0].hue);
+  const hue = $derived(orion.draft?.gestures?.oriondo?.hue); // undefined: the skin's own colour
+  // The thumbnails redraw for the menu being edited, a little after the last change (the slider fires on every pixel).
+  let preview = $state({ labels: '["1","2","3","4"]' });
+  $effect(() => {
+    const labels = items.length ? items.map((i) => String(i.label ?? "")) : ["1", "2", "3", "4"];
+    const next = { labels: JSON.stringify(labels), weights: JSON.stringify(items.map(weightOf)), ...(hue === undefined ? {} : { hue }), ...(invert ? { invert: 1 } : {}) };
+    const t = setTimeout(() => (preview = next), 200);
+    return () => clearTimeout(t);
+  });
+  const invert = $derived(orion.draft?.gestures?.oriondo?.invert === true);
   function resetSettings() {
+    conf().skin = defaults.skin ?? SKINS[0].id;
+    delete conf().hue;
+    delete conf().invert;
     for (const k of Object.keys(params)) {
       if (k in defaults) conf()[k] = defaults[k];
       else delete conf()[k]; // not in the shipped config: the engine's own default applies
@@ -108,7 +127,8 @@
     <section class="panel wheel" class:off={!enabled}>
       <Breadcrumb crumbs={trail} onpick={goto} />
       <MenuWheel {items} {back} parentLabel={trail[trail.length - 1].label} selected={sel} onselect={(i) => (sel = i)} onmove={move}
-                 onadd={add} onremove={remove} onenter={() => labelField?.focus()} onopen={open} onup={up} />
+                 onadd={add} onremove={remove} onenter={() => labelField?.focus()} onopen={open} onup={up}
+                 onresize={resize} onequal={() => items.forEach((it) => delete it.weight)} />
       {#if here.length}<!-- the defaults replace the whole menu: offered at the root only -->
       {:else if !items.length && shipped?.length}
         <p class="load"><button onclick={loadDefaults}>Load the default menu</button></p>
@@ -121,6 +141,27 @@
         <h2>{sel >= 0 ? `Slice ${sel + 1}` : "Slice"}</h2>
         <ItemInspector item={items[sel]} onremove={() => remove(sel)} onopen={() => open(sel)} canNest={canNest(here)}
                        bind:inputref={labelField} />
+      </section>
+      <section class="panel box look">
+        <h2>Look</h2>
+        <div class="skins" role="group" aria-label="Skin">
+          {#each SKINS as s (s.id)}
+            <button class:on={skin === s.id} aria-pressed={skin === s.id} onclick={() => (conf().skin = s.id)} title="{s.label} · {s.note}">
+              <span class="thumb"><img src={skinPreviewUrl(s.id, preview)} alt="" width="560" height="560" loading="lazy" /></span>
+              <span>{s.label}</span>
+            </button>
+          {/each}
+        </div>
+        <label class="row">
+          <span>Colour</span>
+          <input type="range" min="0" max="359" step="1" class="hue" value={hue ?? skinHue} oninput={(e) => (conf().hue = +e.target.value)} />
+          <button class="ghost" onclick={() => delete conf().hue} disabled={hue === undefined}>Reset</button>
+        </label>
+        <label class="row">
+          <span>Text</span>
+          <span class="inline"><Switch label="Invert text colour" checked={invert} onchange={(on) => (on ? (conf().invert = true) : delete conf().invert)} /> {invert ? "Inverted" : "Skin default"}</span>
+        </label>
+        <small class="muted">Colour tints the whole skin; shapes and contrast stay. Takes effect the next time the menu opens.</small>
       </section>
       <section class="panel box params">
         <div class="head">
@@ -151,6 +192,14 @@
   .params label { display: grid; grid-template-columns: 78px 1fr 40px; align-items: center; gap: 4px 10px; font-size: 12.5px; color: var(--dust); }
   .params small { grid-column: 1 / -1; font-size: 11.5px; line-height: 1.35; color: #8a93b8b0; }
   .params b { color: var(--star); font-weight: 500; text-align: right; font-variant-numeric: tabular-nums; }
+  .hue { background: linear-gradient(90deg, hsl(0 80% 55%), hsl(60 80% 55%), hsl(120 80% 55%), hsl(180 80% 55%), hsl(240 80% 55%), hsl(300 80% 55%), hsl(360 80% 55%)); height: 8px; border-radius: 4px; }
+  .skins { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .skins button { display: grid; gap: 4px; padding: 4px; background: transparent; border: 1px solid var(--line); border-radius: 8px; font-size: 11.5px; color: var(--dust); }
+  .skins button.on { border-color: var(--rigel); color: var(--star); background: #335e9e33; }
+  .skins .thumb { display: block; aspect-ratio: 1; overflow: hidden; border-radius: 5px; }
+  .skins img { width: 125%; max-width: none; margin: -12.5%; height: auto; display: block; } /* the pie fills the middle 80% of the window */
+  .look .row { display: grid; grid-template-columns: 56px 1fr auto; align-items: center; gap: 10px; font-size: 12.5px; color: var(--dust); }
+  .look .inline { grid-column: 2 / 4; display: flex; align-items: center; gap: 8px; }
   details { display: grid; gap: 12px; }
   summary { cursor: pointer; color: var(--dust); font-size: 12.5px; }
   details[open] summary { margin-bottom: 12px; }

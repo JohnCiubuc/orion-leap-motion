@@ -38,14 +38,14 @@ def _tour(skin, frame):
     """Drive a real MenuAnim through open → hover → enter → deeper → back → fire → close, calling frame(label, anim, t)."""
     a = MenuAnim(**skin.MOTION)
     t = 0.0
-    a.open(["1", "2", "3", "4"], t, [False, True, False, False])
+    a.open(["1", "2", "3", "4"], t, [False, True, False, False], [1, 1, 1, 0.5])  # unequal widths, like a user menu
     steps = [("bloom", 0.5), ("hover", 0.2), ("pulling", 0.2)]
     a.update(0.0, 0.5, 1, 0.5, 0.3)
     for label, dur in steps:
         t += dur
         frame(label, a, t)
     a.update(0, 1, 1, 1, t)
-    a.enter(["a", "b", "c"], t, 270, "2", [False, True, False])
+    a.enter(["a", "b", "c"], t, 270, "2", [False, True, False], [1, 0.5, 2])
     for label, dur in (("enter+0.03", 0.03), ("enter+0.09", 0.06), ("enter+0.2", 0.11), ("submenu", 0.6)):
         t += dur
         frame(label, a, t)
@@ -68,8 +68,28 @@ def _tour(skin, frame):
     frame("closed", a, t)
 
 
-def test_aurora_draws_every_phase():
-    skin = get_skin("aurora")
+@pytest.mark.parametrize("name", names())
+def test_tune_rotates_the_palette_and_flips_the_text(name):
+    import colorsys
+    skin = get_skin(name)
+    hue = lambda c: colorsys.rgb_to_hls(*c)[0] * 360  # noqa: E731
+    try:
+        skin.tune(None, False)
+        base, label = skin.ACCENT, skin.LABEL
+        skin.tune(skin.HUE + 100, True)
+        assert skin.LABEL == tuple(1 - x for x in type(skin).LABEL) and skin.LABEL_HOT == tuple(1 - x for x in type(skin).LABEL_HOT)
+        if colorsys.rgb_to_hls(*base)[2] > 0.05:  # a grey accent has no hue to move
+            assert (hue(skin.ACCENT) - hue(base)) % 360 == pytest.approx(100, abs=1)
+        skin.tune(None, False)
+        assert skin.ACCENT == pytest.approx(base) and skin.LABEL == label  # not cumulative
+    finally:
+        skin.tune(None, False)
+
+
+@pytest.mark.parametrize("name", names())
+def test_skin_draws_every_phase(name):
+    skin = get_skin(name)
+    skin.tune(300, True)
     seen = {}
 
     def frame(label, anim, t):
@@ -77,24 +97,29 @@ def test_aurora_draws_every_phase():
         skin.draw(cr, anim.step(t), SIZE, SIZE)
         seen[label] = _ink(surf)
 
-    _tour(skin, frame)
+    try:
+        _tour(skin, frame)
+    finally:
+        skin.tune(None, False)
     assert seen["bloom"] and seen["submenu"] and seen["two-deep"] and seen["back-hover"] and seen["fire"]
     assert not seen["closed"]
 
 
-def test_render_contact_sheet():
+@pytest.mark.parametrize("name", names())
+def test_render_contact_sheet(name):
     out = os.environ.get("ORION_RENDER_DIR")
     if not out:
         pytest.skip("set ORION_RENDER_DIR to write PNGs")
-    skin = get_skin("aurora")
-    Path(out).mkdir(parents=True, exist_ok=True)
+    skin = get_skin(name)
+    out = Path(out) / name
+    out.mkdir(parents=True, exist_ok=True)
 
     def frame(label, anim, t):
         surf, cr = _surface()
         cr.set_source_rgb(0.04, 0.05, 0.1)  # a dark desktop behind the translucent pie
         cr.paint()
         skin.draw(cr, anim.step(t), SIZE, SIZE)
-        surf.write_to_png(str(Path(out) / f"{label.replace('+', '_')}.png"))
+        surf.write_to_png(str(out / f"{label.replace('+', '_')}.png"))
 
     _tour(skin, frame)
 
@@ -167,3 +192,13 @@ def test_a_default_skin_that_raises_breaks_the_menu_for_good(monkeypatch):
     assert ctl.draw(None, ctl.view(0.5), SIZE, SIZE) is False and ctl.broken
     _open(ctl, None, 2.0)
     assert ctl.view(2.1) is None  # nothing is drawn, nothing to leave on screen
+
+
+# ── Editor preview ──────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("name", names())
+def test_preview_png_for_every_skin(name):
+    pytest.importorskip("cairo")
+    from orion.menu_preview import png
+    out = png(name, ["a", "b", "c"], [1, 0.5, 2], hue=300, invert=True)
+    assert out[:8] == b"\x89PNG\r\n\x1a\n" and len(out) > 2000

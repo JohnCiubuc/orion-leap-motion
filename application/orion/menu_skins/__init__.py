@@ -25,4 +25,4 @@ def names():
     return sorted(_SKINS)
 
 
-from . import aurora  # noqa: E402, F401  (registers itself)
+from . import aurora, compass, ember, frost, halo, neon, orbit, paper, petal, reticle, terminal  # noqa: E402, F401  (each registers itself)

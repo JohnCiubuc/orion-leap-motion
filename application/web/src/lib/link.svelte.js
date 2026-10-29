@@ -4,6 +4,10 @@
 const q = new URLSearchParams(location.search);
 const WS_URL = `ws://127.0.0.1:${q.get("port") || location.port}/ws?token=${q.get("token") || ""}`;
 
+/** URL of the engine's PNG of a skin (`params`: labels, weights, hue, invert), drawn by the same code as the overlay. */
+export const skinPreviewUrl = (name, params) =>
+  `${location.protocol}//127.0.0.1:${q.get("port") || location.port}/skin/${name}.png?token=${q.get("token") || ""}&${new URLSearchParams(params)}`;
+
 export const orion = $state({
   connected: false,
   status: {},

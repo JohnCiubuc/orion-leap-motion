@@ -60,11 +60,17 @@ def vec(deg):
     return math.sin(a), -math.cos(a)
 
 
-def slice_angles(n, back):
-    """Radians clockwise from the top. A submenu keeps the slot at `back` free and fills the rest clockwise from it."""
-    if back is None:
-        return [i * TAU / n for i in range(n)]
-    return [(back + (i + 1) * TAU / (n + 1)) % TAU for i in range(n)]
+def slot_layout(weights, back):
+    """(centre, width) in radians clockwise from the top of every slot, widths proportional to `weights`. The root centres
+    the first item on the top; a submenu puts a free slot of weight 1 first, facing its parent. Same rule as
+    gestures/oriondo.py slot_layout (degrees); this file cannot import it, the overlay runs it bare."""
+    ws = list(weights) if back is None else [1.0, *weights]
+    sizes = [TAU * w / sum(ws) for w in ws]
+    centre, out = back or 0.0, []
+    for k, size in enumerate(sizes):
+        centre += (sizes[k - 1] + size) / 2 if k else 0.0
+        out.append((centre % TAU, size))
+    return out if back is None else out[1:]
 
 
 @dataclass
@@ -76,6 +82,7 @@ class SliceView:
     glow: float = 0.0
     flash: float = 0.0
     angle: float = 0.0  # radians clockwise from the top
+    span: float = 0.0  # its width in radians, gap included
     label: str = ""
     sub: bool = False  # opens a submenu
 
@@ -84,6 +91,7 @@ class SliceView:
 class BackView:
     """The slot facing the parent, which a pull turns into a step back. Drawn as the ghost parent, not as a slice."""
     angle: float
+    span: float = 0.0  # radians
     lift: float = 0.0
     glow: float = 0.0
     stretch: float = 0.0
@@ -113,6 +121,7 @@ class Layer:
 class Level:
     labels: list
     subs: list
+    weights: list  # relative slice widths
     back: float | None  # radians, None at the root
     parent: str  # label of the item that opened it
     t0: float  # when its slices start to bloom
@@ -141,8 +150,8 @@ class MenuAnim:
         self.reduced, self.omega = reduced_motion, 4.0 / travel_time
         self.levels, self.labels = [], []
 
-    def open(self, labels, now, subs=None):
-        self.levels = [self._level(labels, subs, None, "", now)]
+    def open(self, labels, now, subs=None, weights=None):
+        self.levels = [self._level(labels, subs, weights, None, "", now)]
         self.t_open, self.t_close, self.fire_at, self.fired = now, None, None, None
         self.last, self.hover, self.pull = now, None, 0.0
         self.arc, self.back_lift, self.back_stretch = 0.0, 0.0, 0.0
@@ -151,9 +160,10 @@ class MenuAnim:
         self.leaving, self.ghost_alpha, self.pulse_t = [], {}, None
         self._reset_level()
 
-    def _level(self, labels, subs, back, parent, now):
+    def _level(self, labels, subs, weights, back, parent, now):
         subs = list(subs) if subs is not None else [False] * len(labels)
-        return Level(list(labels), subs, None if back is None else math.radians(back), parent, now - 1 if self.reduced else now)
+        weights = list(weights) if weights is not None else [1.0] * len(labels)
+        return Level(list(labels), subs, weights, None if back is None else math.radians(back), parent, now - 1 if self.reduced else now)
 
     def _reset_level(self):
         n = len(self.levels[-1].labels)
@@ -166,17 +176,17 @@ class MenuAnim:
         self._advance(now)  # integrate up to now with the old targets first
         self.target, self.hover, self.pull = (x, y), hover, pull
 
-    def enter(self, labels, now, back, parent, subs=None):
+    def enter(self, labels, now, back, parent, subs=None, weights=None):
         """Descend into a submenu whose slot facing the parent is at `back` degrees."""
         if not self._live():
             return
         picked, toward = self.hover if self.hover is not None and self.hover >= 0 else None, (back + 180) % 360
         self._travel(now, toward, picked)
-        self.levels.append(self._level(labels, subs, back, parent, now))
+        self.levels.append(self._level(labels, subs, weights, back, parent, now))
         self.ghost_alpha.setdefault(len(self.levels) - 1, 0.0)
         self._reset_level()
 
-    def back(self, labels, now, back, away, subs=None):
+    def back(self, labels, now, back, away, subs=None, weights=None):
         """Step back up to the parent level (`back` is its own back angle, None at the root); `away` is the pull direction."""
         if not self._live() or len(self.levels) < 2:
             return
@@ -184,7 +194,8 @@ class MenuAnim:
         self.ghost_alpha.pop(len(self.levels) - 1, None)
         self.levels.pop()
         top = self.levels[-1]
-        self.levels[-1] = Level(list(labels), list(subs) if subs is not None else top.subs, top.back, top.parent,
+        self.levels[-1] = Level(list(labels), list(subs) if subs is not None else top.subs,
+                                list(weights) if weights is not None else [1.0] * len(labels), top.back, top.parent,
                                 now - 1 if self.reduced else now)
         self._reset_level()
 
@@ -247,17 +258,21 @@ class MenuAnim:
         n = len(cur.labels)
         gone_at = lambda i: 1.0 if self.t_close is None else 1 - ease_out_cubic((now - self.t_close - (n - 1 - i) * CLOSE_STAGGER) / CLOSE)  # noqa: E731
         slices = []
-        for i, ang in enumerate(slice_angles(n, cur.back)):
+        for i, (ang, span) in enumerate(slot_layout(cur.weights, cur.back)):
             p = (now - cur.t0 - i * STAGGER) / OPEN
             gone = gone_at(i)
             flash = max(0.0, 1 - (now - self.fire_at) / FLASH) if self.fired == i else 0.0
             slices.append(SliceView(ease_out_back(p) * gone, _clamp(p * 2) * gone, self.lift[i], self.stretch[i],
-                                    self.lift[i], flash, ang, cur.labels[i], cur.subs[i]))
+                                    self.lift[i], flash, ang, span, cur.labels[i], cur.subs[i]))
         shown = self.t_close is None or now < self.t_close + CLOSE + CLOSE_STAGGER * (n - 1)
         pan = (self.pan[0].x, self.pan[1].x)
-        back = None if cur.back is None else BackView(cur.back, self.back_lift, self.back_lift, self.back_stretch)
+        back = None if cur.back is None else BackView(cur.back, self._back_span(cur), self.back_lift, self.back_lift, self.back_stretch)
         return MenuView(shown, slices, (self.marker[0], self.marker[1]), self.arc, self.hover,
                         n + (cur.back is not None), back, self._ghosts(cur), pan, self._pulse(now), self._leaving(now, pan))
+
+    @staticmethod
+    def _back_span(lvl):
+        return TAU / (sum(lvl.weights) + 1)
 
     def _pulse(self, now):
         return 1.0 if self.pulse_t is None else _clamp((now - self.pulse_t) / PULSE)
@@ -283,11 +298,11 @@ class MenuAnim:
             keep.append(rec)
             lvl, n = rec["level"], len(rec["level"].labels)
             slices = []
-            for i, ang in enumerate(slice_angles(n, lvl.back)):
+            for i, (ang, span) in enumerate(slot_layout(lvl.weights, lvl.back)):
                 gone = 1 - ease_out_cubic((t - (n - 1 - i) * CLOSE_STAGGER) / CLOSE)
                 picked = rec["picked"] == i
                 slices.append(SliceView(1.0 if picked else gone, (1 - ease_out_cubic(t / LEAVE)) if picked else gone,
-                                        0.0, 0.0, 0.0, 0.0, ang, lvl.labels[i], lvl.subs[i]))
+                                        0.0, 0.0, 0.0, 0.0, ang, span, lvl.labels[i], lvl.subs[i]))
             ux, uy = rec["u"]
             out.append(Layer((pan[0] - ux, pan[1] - uy), slices, n + (lvl.back is not None), leave, rec["picked"], lvl.back))
         self.leaving = keep  # old layers drop out once their collapse has played

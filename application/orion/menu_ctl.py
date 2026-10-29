@@ -23,9 +23,9 @@ class MenuController:
         elif self.anim is None:
             return
         elif op == "enter":
-            self.anim.enter(msg["labels"], now, msg["back"], msg.get("parent", ""), msg.get("subs"))
+            self.anim.enter(msg["labels"], now, msg["back"], msg.get("parent", ""), msg.get("subs"), msg.get("weights"))
         elif op == "back":
-            self.anim.back(msg["labels"], now, msg["back"], msg["away"], msg.get("subs"))
+            self.anim.back(msg["labels"], now, msg["back"], msg["away"], msg.get("subs"), msg.get("weights"))
         elif op == "update":
             self.anim.update(msg["x"], msg["y"], msg["hover"], msg["pull"], now)
         elif op == "fire":
@@ -41,8 +41,10 @@ class MenuController:
             self.broken = True
             return
         self.skin = skin
+        if hasattr(skin, "tune"):
+            skin.tune(msg.get("hue"), msg.get("invert", False))
         self.anim = self.anim_factory(reduced_motion=self.reduced, **skin.MOTION)
-        self.anim.open(msg["labels"], now, msg.get("subs"))
+        self.anim.open(msg["labels"], now, msg.get("subs"), msg.get("weights"))
 
     def view(self, now):
         """The current MenuView, or None when nothing should be on screen."""
