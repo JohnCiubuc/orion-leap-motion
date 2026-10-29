@@ -1,20 +1,30 @@
 // Pure logic for the OrionDo menu editor: tree operations and wheel geometry. No Svelte here, so `node --test` loads it.
-// A menu is a list of { label, action, args }; a future submenu is an `items` list inside an item. Operations take a
+// A menu is a list of { label, action, args }; a submenu is { label, items: [...] } (no action). Operations take a
 // `path` of indices from the root ([] is the root menu). Geometry follows the on-screen overlay (overlay_menu.py):
 // slice 0 at the top, clockwise, equal slices, a small gap between them.
 
 export const MAX_ITEMS = 12; // more slices than this are unreadable
+export const MAX_DEPTH = 4; // submenu levels below the root the editor will build
 export const GAP = (3 * Math.PI) / 180;
 
 // ── Geometry (angles in radians, clockwise from the top; SVG y points down) ──
 
 export const sliceCenter = (i, n) => (i * 2 * Math.PI) / n; // i and n may be fractional while animating
 
+// A submenu keeps the slot facing its parent free: n children use n + 1 slots, the gap at `back` (degrees clockwise
+// from the top) and the children filling the rest clockwise from it. The root has no gap. This is overlay layout:
+// oriondo.py slot_angles and menu_anim.py slice_angles use the same rule.
+export const slotAngles = (n, back = null) =>
+  Array.from({ length: n }, (_, i) => (back == null ? (i * 360) / n : (back + ((i + 1) * 360) / (n + 1)) % 360));
+export const slotLayout = (n, back = null) => (back == null ? { slots: n, offset: 0 } : { slots: n + 1, offset: 1 });
+/** Centre of slot `i` of `slots`, rotated by `rotate` radians (the back angle, for a submenu). */
+export const slotCenter = (i, slots, rotate = 0) => sliceCenter(i, slots) + rotate;
+
 const point = (r, a, cx, cy) => `${(cx + r * Math.sin(a)).toFixed(3)} ${(cy - r * Math.cos(a)).toFixed(3)}`;
 
-export function arcPath(i, n, rIn, rOut, cx = 0, cy = 0) {
+export function arcPath(i, n, rIn, rOut, cx = 0, cy = 0, rotate = 0) {
   const half = Math.max(Math.PI / n - GAP / 2, 0.01);
-  const c = sliceCenter(i, n);
+  const c = slotCenter(i, n, rotate);
   const large = 2 * half > Math.PI ? 1 : 0; // only a lone slice spans more than half the ring
   return `M ${point(rOut, c - half, cx, cy)} A ${rOut} ${rOut} 0 ${large} 1 ${point(rOut, c + half, cx, cy)} `
     + `L ${point(rIn, c + half, cx, cy)} A ${rIn} ${rIn} 0 ${large} 0 ${point(rIn, c - half, cx, cy)} Z`;
@@ -62,6 +72,62 @@ export function blankItem(items, path) {
   let n = 1;
   while (used.has(String(n))) n++;
   return { label: String(n), action: "input.keys", args: {} };
+}
+
+// ── Submenus ──
+
+export const isSubmenu = (item) => Array.isArray(item?.items);
+export const hasChildren = (item) => isSubmenu(item) && item.items.length > 0;
+
+export function toSubmenu(item) {
+  delete item.action;
+  delete item.args;
+  item.items = [];
+}
+
+export function toAction(item) {
+  delete item.items;
+  item.action = "";
+  item.args = {};
+}
+
+/** A submenu can be created at `path` (the list being edited) while it stays within the depth limit. */
+export const canNest = (path) => path.length < MAX_DEPTH;
+
+/** The longest prefix of `path` where every step is a submenu: a removed or converted item drops back toward the root. */
+export function clampPath(items, path) {
+  const out = [];
+  let list = items;
+  for (const i of path) {
+    if (!isSubmenu(list?.[i])) break;
+    out.push(i);
+    list = list[i].items;
+  }
+  return out;
+}
+
+export function crumbs(items, path) {
+  const out = [{ label: "Root", path: [] }];
+  let list = items;
+  const valid = clampPath(items, path);
+  valid.forEach((i, k) => {
+    out.push({ label: String(list[i].label ?? ""), path: valid.slice(0, k + 1) });
+    list = list[i].items;
+  });
+  return out;
+}
+
+/** Back angle (degrees) of the submenu opened from child `index` of a list of `n` whose own back angle is `back`. */
+export const backAngleFor = (index, n, back = null) => (slotAngles(n, back)[index] + 180) % 360;
+
+/** Back angle of the list at `path` (null at the root). */
+export function backAt(items, path) {
+  let list = items, back = null;
+  for (const i of path) {
+    back = backAngleFor(i, list.length, back);
+    list = list[i].items;
+  }
+  return back;
 }
 
 // ── Selection bookkeeping ──
