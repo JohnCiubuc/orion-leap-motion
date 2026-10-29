@@ -1450,3 +1450,98 @@ def test_open_op_carries_skin_and_subs(monkeypatch):
 
 def test_default_config_names_the_aurora_skin():
     assert Config()["gestures"]["oriondo"]["skin"] == "aurora"
+
+
+# ── OrionDo: submenu animation model ─────────────────────────────────────────
+
+def _dirs(slices):  # angles compared as directions so 0 and 2π agree
+    return [(round(math.sin(s.angle), 6), round(math.cos(s.angle), 6)) for s in slices]
+
+
+def _want(*deg):
+    return [(round(math.sin(math.radians(d)), 6), round(math.cos(math.radians(d)), 6)) for d in deg]
+
+
+def _entered(back=180, now=1.0, settle=True):
+    a = _anim()
+    a.update(0, 0.9, 0, 1.0, 0.9)  # the first item is the one being pulled
+    a.enter(["a", "b", "c"], now, back, "S")
+    if settle:
+        a.step(now + 1.0)
+    return a
+
+
+def test_anim_slice_angles_root_and_submenu():
+    assert _dirs(_anim().step(0.6).slices) == _want(0, 90, 180, 270)
+    v = _entered().step(2.5)
+    assert _dirs(v.slices) == _want(270, 0, 90) and v.slots == 4 and v.back.angle == pytest.approx(math.pi)
+    assert _anim().step(0.6).back is None and _anim().step(0.6).slots == 4
+
+
+def test_anim_enter_travels_with_a_spring_and_hands_over_the_layers():
+    a = _entered(settle=False)
+    assert a.step(1.0).pan == pytest.approx((0, -1), abs=0.05)  # the new centre sits where the item was
+    assert [s.scale for s in a.step(1.0).slices] == [0, 0, 0]  # the children bloom from nothing
+    leaving = a.step(1.1).leaving
+    assert len(leaving) == 1 and leaving[0].picked == 0 and 0 < leaving[0].leave < 1 and leaving[0].slots == 4
+    ys = [a.step(1.1 + i / 100).pan[1] for i in range(1, 90)]
+    assert max(ys) > 0.01 and ys[-1] == pytest.approx(0, abs=0.01)  # overshoots, then settles
+    assert a.step(1.5).leaving == []
+    assert [s.scale for s in a.step(2.0).slices] == pytest.approx([1.0] * 3)
+
+
+def test_anim_ghosts_follow_the_path_up():
+    a = _entered()
+    g = a.step(2.5).ghosts
+    assert len(g) == 1 and (g[0].x, g[0].y) == pytest.approx((0, 1), abs=1e-6) and g[0].alpha == pytest.approx(0.6, abs=0.02) and g[0].label == "S"
+    a.update(0, 0, 1, 1.0, 3.0)
+    a.enter(["x"], 3.0, 90, "T")
+    g = a.step(5.0).ghosts
+    assert [(x.label, round(x.x, 6), round(x.y, 6)) for x in g] == [("T", 1.0, 0.0), ("S", 1.0, 1.0)]
+    assert [x.alpha for x in g] == pytest.approx([0.6, 0.3], abs=0.02)
+    a.back(["a", "b", "c"], 6.0, 180, 90)
+    assert [x.label for x in a.step(8.0).ghosts] == ["S"]
+
+
+def test_anim_back_travels_toward_the_parent():
+    a = _entered()
+    a.back(["1", "2", "3", "4"], 3.0, None, 180)
+    assert a.step(3.0).pan == pytest.approx((0, 1), abs=0.05)
+    v = a.step(3.1)
+    assert len(v.leaving) == 1 and v.leaving[0].picked is None
+    v = a.step(4.5)
+    assert v.pan == pytest.approx((0, 0), abs=0.01) and v.back is None and v.ghosts == [] and v.leaving == []
+    assert [s.label for s in v.slices] == ["1", "2", "3", "4"]
+
+
+def test_anim_back_gap_hover_lifts_the_gap_not_a_slice():
+    a = _entered()
+    a.update(0, -0.5, -1, 0.5, 2.5)
+    v = a.step(3.0)
+    assert v.hover == -1 and v.back.lift > 0.9 and v.back.stretch == pytest.approx(0.5, abs=0.02)
+    assert [s.lift for s in v.slices] == [0, 0, 0] and v.arc == pytest.approx(0.5, abs=0.02)
+
+
+def test_anim_pulse_restarts_on_enter_and_back():
+    a = _entered(settle=False)
+    assert a.step(1.0).pulse < 0.1 and a.step(1.5).pulse == 1.0
+    a.back(["1", "2", "3", "4"], 2.0, None, 180)
+    assert a.step(2.0).pulse < 0.1 and a.step(2.5).pulse == 1.0
+
+
+def test_anim_reversing_mid_travel_keeps_the_scene_continuous():
+    a = _entered(settle=False)
+    v = a.step(1.05)
+    root_centre = (v.pan[0] + v.ghosts[0].x, v.pan[1] + v.ghosts[0].y)  # where the parent sits right now
+    a.back(["1", "2", "3", "4"], 1.05, None, 180)
+    assert a.step(1.05).pan == pytest.approx(root_centre, abs=0.02)
+
+
+def test_anim_reduced_motion_jumps():
+    from orion.menu_anim import MenuAnim
+    a = MenuAnim(reduced_motion=True)
+    a.open(["1", "2"], 0.0)
+    a.update(0, 0.9, 0, 1.0, 0.1)
+    a.enter(["a", "b"], 0.2, 180, "S")
+    v = a.step(0.25)
+    assert v.pan == (0, 0) and v.leaving == [] and [s.scale for s in v.slices] == pytest.approx([1.0, 1.0])
