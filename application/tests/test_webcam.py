@@ -257,8 +257,11 @@ def test_source_emits_empty_frames_without_hands():
 def test_source_emits_hands_and_preview():
     det = project(facing(extended={"index", "middle"}))
     src, frames, images = run_source(detect=lambda rgb, t: [det])
-    assert frames and len(frames[-1].hands) == 1 and "index" in frames[-1].hands[0].extended
-    assert images and images[0].width == 320 and len(images[0].pixels) == images[0].width * images[0].height
+    with_hand = [f for f in frames if f.hands]
+    assert with_hand and len(with_hand[-1].hands) == 1 and "index" in with_hand[-1].hands[0].extended
+    # the UI's IR view shows a stereo pair stacked vertically: the mono preview is sent twice
+    assert images and images[0].width == 320 and images[0].height == 480
+    assert len(images[0].pixels) == images[0].width * images[0].height
 
 
 def test_source_reports_missing_camera():
@@ -348,3 +351,35 @@ def test_pose_detected_from_webcam_frames(name):
         t = i * DT
         seen += [(e.name, e.phase) for e in g.update(Frame(t=t, hands=tr.update(t, [project(WEBCAM_POSES[name]())]), source="webcam"))]
     assert (name, "begin") in seen
+
+
+# ── Review fixes ──────────────────────────────────────────────────────────────
+
+def test_tilted_hand_off_centre_keeps_its_position():
+    """Pitching the hand toward the camera shortens wrist→knuckle in the image; depth must not read it as distance."""
+    h = make_hand(palm=(150, 250, 0), extended={"index", "middle"}, direction=(0, 0.866, -0.5),
+                  normal=(0, -0.5, -0.866))  # 30° toward the camera
+    assert convert(h).palm[:2] == pytest.approx(palm_of(h)[:2], abs=6)  # measured over a 30° tilt: 14 mm off before the fix
+
+
+def test_source_survives_a_detector_error_and_closes_up():
+    det = project(facing(extended={"index", "middle"}))
+    calls = []
+
+    def detect(rgb, t_ms):
+        calls.append(t_ms)
+        if len(calls) == 3:
+            raise RuntimeError("mediapipe hiccup")
+        return [det]
+
+    src, frames, _ = run_source(detect=detect, seconds=0.4)
+    assert len(frames) > 10 and src.status["error"] == ""  # kept going after the error
+    assert frames[-1].hands == ()  # and ended with an empty frame so an open menu can close
+
+
+def test_detector_timestamps_strictly_increase(monkeypatch):
+    import types
+    monkeypatch.setattr("orion.webcam.time", types.SimpleNamespace(monotonic=lambda: 1.0))
+    stamps = []
+    run_source(detect=lambda rgb, t: stamps.append(t) or [], seconds=0.15)
+    assert len(stamps) > 3 and all(b > a for a, b in zip(stamps, stamps[1:]))

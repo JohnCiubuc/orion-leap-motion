@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import dataclasses
+import logging
 import math
 import os
 import time
@@ -21,6 +22,7 @@ from .sources import Source
 
 MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task"
 MODEL_FILE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / APP / "hand_landmarker.task"
+log = logging.getLogger(__name__)
 PREVIEW_WIDTH = 320
 STALL_PERIOD = 0.05  # s between empty frames while the camera delivers nothing
 PALM_LM = (0, 5, 9, 13, 17)  # wrist + the four knuckles: the palm's centre is their mean
@@ -73,11 +75,24 @@ def _focal(cam: Cam) -> float:
     return (cam.width / 2) / math.tan(math.radians(cam.fov_deg) / 2)
 
 
+def _spread(points: np.ndarray) -> float:
+    """Mean distance of the points from their centre."""
+    return float(np.linalg.norm(points - points.mean(axis=0), axis=1).mean())
+
+
+def _world_mm(det: Detection, cam: Cam) -> np.ndarray:
+    """MediaPipe's hand shape in mm, y up, scaled so wrist → middle-knuckle is the user's `hand_mm` (for depth only)."""
+    w = det.world * (1000, -1000, 1000)
+    length = float(np.linalg.norm(w[9] - w[0]))
+    return w * (cam.hand_mm / length if length > 1e-6 else 1.0)
+
+
 def apparent_depth(det: Detection, cam: Cam) -> float:
-    """Distance from the camera in mm, from how large the hand looks."""
-    px = det.image[:, :2] * (cam.width, cam.height)
-    size = max(float(np.linalg.norm(px[9] - px[0])), 1.0)
-    return min(max(_focal(cam) * cam.hand_mm / size, DEPTH_RANGE[0]), DEPTH_RANGE[1])
+    """Distance from the camera in mm: how big the palm looks against how big it really is. Both are measured
+    across the image plane, so tilting the hand toward the camera shrinks them alike and the estimate holds."""
+    px = _spread(det.image[list(PALM_LM), :2] * (cam.width, cam.height))
+    mm = _spread(_world_mm(det, cam)[list(PALM_LM), :2])
+    return min(max(_focal(cam) * mm / max(px, 1e-3), DEPTH_RANGE[0]), DEPTH_RANGE[1])
 
 
 def landmarks_to_hand(det: Detection, cam: Cam, prev_extended: frozenset[str] = frozenset(), hid: int = 0,
@@ -90,7 +105,7 @@ def landmarks_to_hand(det: Detection, cam: Cam, prev_extended: frozenset[str] = 
     palm = np.array(((c[0] - cam.width / 2) * z / f,
                      -(c[1] - cam.height / 2) * z / f + PALM_HEIGHT,
                      z - NOMINAL_DISTANCE), np.float32)
-    w = det.world * (1000, -1000, 1000)  # hand shape in real mm, y up
+    w = det.world * (1000, -1000, 1000)  # the fingertip keeps MediaPipe's own scale: re-scaling per frame would add jitter
     w = w - w[list(PALM_LM)].mean(axis=0) + palm
     fingers, straight = [], []
     for k, name in enumerate(FINGERS):
@@ -240,10 +255,11 @@ class WebcamSource(Source):
         self.status.update(cameras=find_cameras() if cameras is None else cameras, error="")
 
     def run(self):
-        cap = None
+        cap, self._streaming = None, False
         try:
             detect = self.detector_factory()
             cap = self._open()
+            self._streaming = True
             self._loop(cap, detect)
         except ImportError as e:
             self._fail(f'The webcam source needs the "webcam" extra: pip install -e ".[webcam]" ({e})')
@@ -252,6 +268,14 @@ class WebcamSource(Source):
         finally:
             if cap:
                 cap.release()
+            if self._streaming:  # whatever ended the loop, let an open menu see the hand go
+                self._empty(time.monotonic())
+
+    def _empty(self, t):
+        try:
+            self.on_frame(Frame(t=t, fps=0.0, source="webcam"))
+        except Exception:
+            log.exception("webcam: empty frame failed")
 
     def _fail(self, text):
         self.status.update(connected=False, error=text)
@@ -272,27 +296,31 @@ class WebcamSource(Source):
         raise RuntimeError("No webcam found" if device == "auto" else f"Could not open {device}")
 
     def _loop(self, cap, detect):
-        tracker, last, fps = None, time.monotonic(), 0.0
+        tracker, last, fps, last_ms = None, time.monotonic(), 0.0, 0
         while not self._stop.is_set():
             ok, image = cap.read()
             t = time.monotonic()
             self.status["connected"] = bool(ok)
             if not ok:  # keep the clock running so OrionDo's "hand lost" close and pose ends still happen
-                self.on_frame(Frame(t=t, fps=0.0, source="webcam"))
+                self._empty(t)
                 self._stop.wait(STALL_PERIOD)
                 continue
-            if self.cfg["mirror"]:
-                image = image[:, ::-1]  # so moving your hand right moves it right
-            if tracker is None:
-                tracker = HandTracker(Cam(image.shape[1], image.shape[0], self.cfg["fov_deg"], self.cfg["hand_mm"]))
-            fps += (1 / max(t - last, 1e-3) - fps) * 0.1
-            last = t
-            hands = tracker.update(t, detect(image[:, :, ::-1], int(t * 1000)))  # BGR → RGB
-            self.on_frame(Frame(t=t, fps=fps, hands=hands, source="webcam"))
-            self._emit_ir(lambda: self._preview(image))
+            try:  # one bad frame (detector or a gesture raising) must not end the stream: the menu only closes on frames
+                if self.cfg["mirror"]:
+                    image = image[:, ::-1]  # so moving your hand right moves it right
+                if tracker is None:
+                    tracker = HandTracker(Cam(image.shape[1], image.shape[0], self.cfg["fov_deg"], self.cfg["hand_mm"]))
+                fps += (1 / max(t - last, 1e-3) - fps) * 0.1
+                last, last_ms = t, max(int(t * 1000), last_ms + 1)  # the detector needs strictly rising timestamps
+                hands = tracker.update(t, detect(image[:, :, ::-1], last_ms))  # BGR → RGB
+                self.on_frame(Frame(t=t, fps=fps, hands=hands, source="webcam"))
+                self._emit_ir(lambda: self._preview(image))
+            except Exception:
+                log.exception("webcam: frame failed")
+                self._empty(t)
 
     @staticmethod
     def _preview(image) -> IRImage:
         small = image[::max(1, image.shape[1] // PREVIEW_WIDTH), ::max(1, image.shape[1] // PREVIEW_WIDTH)]
         gray = small.mean(axis=2).astype(np.uint8)
-        return IRImage(gray.shape[1], gray.shape[0], gray.tobytes())
+        return IRImage(gray.shape[1], gray.shape[0] * 2, np.vstack((gray, gray)).tobytes())  # IRView expects a stereo pair
