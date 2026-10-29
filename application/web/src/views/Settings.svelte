@@ -6,6 +6,7 @@
 
   const g = $derived(orion.draft?.general);
   const o = $derived(orion.draft?.overlay);
+  const w = $derived(orion.draft?.webcam);
   const s = $derived(orion.status);
 </script>
 
@@ -31,6 +32,17 @@
       <div><h3>Tracking source</h3><p class="muted">Demo generates synthetic hands for trying Orion without a device. Applies on restart.</p></div>
       <select bind:value={g.source}><option value="leap">Leap Motion</option><option value="webcam">Webcam</option><option value="demo">Demo</option></select>
     </div>
+    {#if g.source === "webcam" && w}
+      <div class="row">
+        <div><h3>Camera</h3>
+          <p class="muted">Auto picks the first camera that works. Choose one here if it picks the wrong one.
+            {#if s.error}<br /><span class="warn">{s.error}</span>{/if}</p></div>
+        <select bind:value={w.device}>
+          <option value="auto">Auto-detect</option>
+          {#each s.cameras ?? [] as c (c.path)}<option value={c.path}>{c.name} ({c.path})</option>{/each}
+        </select>
+      </div>
+    {/if}
   </div>
 
   <!-- ── Overlay ── -->

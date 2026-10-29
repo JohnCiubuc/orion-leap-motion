@@ -7,12 +7,22 @@ from __future__ import annotations
 
 import dataclasses
 import math
+import os
+import time
+import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 
-from .frame import FINGERS, Finger, Hand
+from .config import APP
+from .frame import FINGERS, Finger, Frame, Hand, IRImage
+from .sources import Source
 
+MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task"
+MODEL_FILE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / APP / "hand_landmarker.task"
+PREVIEW_WIDTH = 320
+STALL_PERIOD = 0.05  # s between empty frames while the camera delivers nothing
 PALM_LM = (0, 5, 9, 13, 17)  # wrist + the four knuckles: the palm's centre is their mean
 NOMINAL_DISTANCE = 400.0  # mm from the camera that maps to leap z = 0
 PALM_HEIGHT = 200.0  # mm added to y so the hand sits where the Leap would see it
@@ -155,3 +165,121 @@ class HandTracker:
                         for k, f in enumerate(raw.fingers))
         return dataclasses.replace(raw, palm=palm, stable=palm.copy(), velocity=tr.filter.dx[:3].astype(np.float32),
                                    fingers=fingers)
+
+
+# ── Source ────────────────────────────────────────────────────────────────────
+
+def find_cameras(root: Path = Path("/sys/class/video4linux")) -> list[dict]:
+    """Capture nodes of the attached cameras (a camera's later nodes carry metadata, not images)."""
+    nodes = sorted((d for d in root.glob("video*") if d.name[5:].isdigit()), key=lambda d: int(d.name[5:]))
+    return [{"path": f"/dev/{d.name}", "name": (d / "name").read_text().strip()}
+            for d in nodes if (d / "index").read_text().strip() == "0"]
+
+
+def ensure_model(path: Path = MODEL_FILE, url: str = MODEL_URL) -> Path:
+    """The hand-landmark model is not bundled with mediapipe: fetch it once, never leaving a partial file."""
+    if path.exists():
+        return path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    try:
+        with urllib.request.urlopen(url, timeout=30) as r, open(tmp, "wb") as f:
+            f.write(r.read())
+    except OSError as e:
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError(f"Could not download the hand model ({e})") from e
+    tmp.replace(path)
+    return path
+
+
+def _cv_capture(path: str, cfg: dict):
+    import cv2
+    cap = cv2.VideoCapture(path, cv2.CAP_V4L2)
+    for prop, key in ((cv2.CAP_PROP_FRAME_WIDTH, "width"), (cv2.CAP_PROP_FRAME_HEIGHT, "height"), (cv2.CAP_PROP_FPS, "fps")):
+        cap.set(prop, cfg[key])
+    return cap
+
+
+def _mediapipe_detector():
+    import mediapipe as mp
+    from mediapipe.tasks import python as tasks
+    from mediapipe.tasks.python import vision
+    landmarker = vision.HandLandmarker.create_from_options(vision.HandLandmarkerOptions(
+        base_options=tasks.BaseOptions(model_asset_path=str(ensure_model())),
+        running_mode=vision.RunningMode.VIDEO, num_hands=2))
+    xyz = lambda pts: np.array([(p.x, p.y, p.z) for p in pts])  # noqa: E731
+
+    def detect(rgb, t_ms):
+        r = landmarker.detect_for_video(mp.Image(image_format=mp.ImageFormat.SRGB, data=np.ascontiguousarray(rgb)), t_ms)
+        return [Detection(xyz(img), xyz(world), cats[0].category_name.lower(), cats[0].score)
+                for img, world, cats in zip(r.hand_landmarks, r.hand_world_landmarks, r.handedness)]
+    return detect
+
+
+class WebcamSource(Source):
+    name = "webcam"
+
+    def __init__(self, on_frame, on_image, ir_fps: float = 30, *, cfg: dict, capture_factory=None,
+                 detector_factory=None, cameras: list[dict] | None = None):
+        super().__init__(on_frame, on_image, ir_fps)
+        self.cfg, self.capture_factory = cfg, capture_factory or _cv_capture
+        self.detector_factory = detector_factory or _mediapipe_detector
+        self.status.update(cameras=find_cameras() if cameras is None else cameras, error="")
+
+    def run(self):
+        cap = None
+        try:
+            detect = self.detector_factory()
+            cap = self._open()
+            self._loop(cap, detect)
+        except ImportError as e:
+            self._fail(f'The webcam source needs the "webcam" extra: pip install -e ".[webcam]" ({e})')
+        except Exception as e:
+            self._fail(str(e))
+        finally:
+            if cap:
+                cap.release()
+
+    def _fail(self, text):
+        self.status.update(connected=False, error=text)
+
+    def _open(self):
+        """The configured device, or in auto mode the first camera that opens and returns an image."""
+        cameras, device = self.status["cameras"], self.cfg["device"]
+        names = {c["path"]: c["name"] for c in cameras}
+        for path in [c["path"] for c in cameras] if device == "auto" else [device]:
+            try:
+                cap = self.capture_factory(path, self.cfg)
+            except Exception:
+                continue
+            if cap.read()[0]:
+                self.status.update(connected=True, device=names.get(path, path), error="")
+                return cap
+            cap.release()
+        raise RuntimeError("No webcam found" if device == "auto" else f"Could not open {device}")
+
+    def _loop(self, cap, detect):
+        tracker, last, fps = None, time.monotonic(), 0.0
+        while not self._stop.is_set():
+            ok, image = cap.read()
+            t = time.monotonic()
+            self.status["connected"] = bool(ok)
+            if not ok:  # keep the clock running so OrionDo's "hand lost" close and pose ends still happen
+                self.on_frame(Frame(t=t, fps=0.0, source="webcam"))
+                self._stop.wait(STALL_PERIOD)
+                continue
+            if self.cfg["mirror"]:
+                image = image[:, ::-1]  # so moving your hand right moves it right
+            if tracker is None:
+                tracker = HandTracker(Cam(image.shape[1], image.shape[0], self.cfg["fov_deg"], self.cfg["hand_mm"]))
+            fps += (1 / max(t - last, 1e-3) - fps) * 0.1
+            last = t
+            hands = tracker.update(t, detect(image[:, :, ::-1], int(t * 1000)))  # BGR → RGB
+            self.on_frame(Frame(t=t, fps=fps, hands=hands, source="webcam"))
+            self._emit_ir(lambda: self._preview(image))
+
+    @staticmethod
+    def _preview(image) -> IRImage:
+        small = image[::max(1, image.shape[1] // PREVIEW_WIDTH), ::max(1, image.shape[1] // PREVIEW_WIDTH)]
+        gray = small.mean(axis=2).astype(np.uint8)
+        return IRImage(gray.shape[1], gray.shape[0], gray.tobytes())

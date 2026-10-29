@@ -197,3 +197,110 @@ def test_oriondo_closes_when_hand_leaves():
     r = Rig()
     r.show(peace(), 0.6)
     assert key(r.show(None, 1.7)) == [("end", "lost")]
+
+
+# ── WebcamSource ──────────────────────────────────────────────────────────────
+
+import threading  # noqa: E402
+import time  # noqa: E402
+
+from orion.config import DEFAULT_FILE  # noqa: E402
+from orion.webcam import WebcamSource, ensure_model, find_cameras  # noqa: E402
+import tomllib  # noqa: E402
+
+WEBCAM_CFG = tomllib.loads(DEFAULT_FILE.read_text())["webcam"]
+
+
+class FakeCapture:
+    def __init__(self, good=10**9):
+        self.good, self.released = good, False  # reads that succeed before the camera stalls
+
+    def read(self):
+        time.sleep(0.005)
+        self.good -= 1
+        return self.good >= 0, np.zeros((480, 640, 3), np.uint8)
+
+    def release(self):
+        self.released = True
+
+
+def run_source(detect=None, capture=None, cameras=None, cfg=None, seconds=0.3, **kw):
+    frames, images = [], []
+    src = WebcamSource(frames.append, images.append, cfg=cfg or WEBCAM_CFG,
+                       capture_factory=lambda path, cfg: capture or FakeCapture(),
+                       detector_factory=(lambda: detect) if detect else None,
+                       cameras=[{"path": "/dev/video2", "name": "Cam"}] if cameras is None else cameras, **kw)
+    src.ir = True
+    t = threading.Thread(target=src.run, daemon=True)
+    t.start()
+    time.sleep(seconds)
+    src.stop()
+    t.join(2)
+    return src, frames, images
+
+
+def test_find_cameras_lists_capture_nodes_only(tmp_path):
+    for n, (name, idx) in {"video3": ("Cam", 1), "video10": ("Other", 0), "video2": ("Cam", 0)}.items():
+        d = tmp_path / n
+        d.mkdir()
+        (d / "name").write_text(name + "\n")
+        (d / "index").write_text(f"{idx}\n")
+    assert find_cameras(tmp_path) == [{"path": "/dev/video2", "name": "Cam"}, {"path": "/dev/video10", "name": "Other"}]
+
+
+def test_source_emits_empty_frames_without_hands():
+    src, frames, _ = run_source(detect=lambda rgb, t: [])
+    assert len(frames) > 5 and all(f.hands == () and f.source == "webcam" for f in frames)
+    assert src.status["connected"] and src.status["device"] == "Cam" and src.status["error"] == ""
+
+
+def test_source_emits_hands_and_preview():
+    det = project(facing(extended={"index", "middle"}))
+    src, frames, images = run_source(detect=lambda rgb, t: [det])
+    assert frames and len(frames[-1].hands) == 1 and "index" in frames[-1].hands[0].extended
+    assert images and images[0].width == 320 and len(images[0].pixels) == images[0].width * images[0].height
+
+
+def test_source_reports_missing_camera():
+    src, frames, _ = run_source(detect=lambda rgb, t: [], cameras=[])
+    assert "No webcam" in src.status["error"] and not src.status["connected"] and frames == []
+
+
+def test_source_reports_missing_mediapipe():
+    def boom():
+        raise ImportError("No module named 'mediapipe'")
+
+    frames = []
+    src = WebcamSource(frames.append, lambda i: None, cfg=WEBCAM_CFG, capture_factory=lambda p, c: FakeCapture(),
+                       detector_factory=boom, cameras=[{"path": "/dev/video2", "name": "Cam"}])
+    src.run()  # returns instead of raising
+    assert 'pip install -e ".[webcam]"' in src.status["error"] and frames == []
+
+
+def test_source_keeps_emitting_when_the_camera_stalls():
+    src, frames, _ = run_source(detect=lambda rgb, t: [], capture=FakeCapture(good=3), seconds=0.5)
+    assert len(frames) >= 5 and all(f.hands == () for f in frames) and not src.status["connected"]
+
+
+def test_chosen_device_is_used(monkeypatch):
+    opened = []
+    frames = []
+    src = WebcamSource(frames.append, lambda i: None, cfg={**WEBCAM_CFG, "device": "/dev/video7"},
+                       capture_factory=lambda p, c: opened.append(p) or FakeCapture(), detector_factory=lambda: (lambda r, t: []),
+                       cameras=[{"path": "/dev/video2", "name": "Cam"}])
+    threading.Timer(0.1, src.stop).start()
+    src.run()
+    assert opened == ["/dev/video7"]
+
+
+def test_ensure_model_downloads_once_and_leaves_no_partial_file(tmp_path):
+    src = tmp_path / "src.task"
+    src.write_bytes(b"model")
+    target = tmp_path / "cache" / "m.task"
+    assert ensure_model(target, src.as_uri()).read_bytes() == b"model"
+    src.unlink()
+    assert ensure_model(target, src.as_uri()) == target  # cached: the missing source is never touched
+    bad = tmp_path / "cache" / "n.task"
+    with pytest.raises(RuntimeError):
+        ensure_model(bad, (tmp_path / "missing").as_uri())
+    assert not bad.exists() and not list((tmp_path / "cache").glob("*.tmp"))

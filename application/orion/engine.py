@@ -20,6 +20,7 @@ from .gestures.paths import PathGesture
 from .handedness import Handedness
 from .router import Router
 from .sources import DemoSource, LeapSource, Recorder, ReplaySource
+from .webcam import WebcamSource
 
 log = logging.getLogger("orion")
 
@@ -74,8 +75,8 @@ class Engine:
 
     def start(self, replay: str | None = None):
         kind = "demo" if self.demo else self.cfg.general["source"]
-        cls = ReplaySource if replay else {"demo": DemoSource}.get(kind, LeapSource)
-        kw = {"path": replay} if replay else {}
+        cls = ReplaySource if replay else {"demo": DemoSource, "webcam": WebcamSource}.get(kind, LeapSource)
+        kw = {"path": replay} if replay else {"cfg": self.cfg["webcam"]} if cls is WebcamSource else {}
         self.source = cls(self.on_frame, lambda img: self.emit("image", img),
                           ir_fps=self.cfg.general["ir_fps"], **kw)
         self.source.start()
