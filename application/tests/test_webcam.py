@@ -128,3 +128,72 @@ def test_velocity_tracks_motion():
     for i in range(31):
         h = tr.update(i * DT, [project(facing(palm=(100 * i * DT, 200, 0)))])[0]
     assert h.velocity[0] == pytest.approx(100, rel=0.15)
+
+
+# ── OrionDo on webcam frames ──────────────────────────────────────────────────
+
+from orion.frame import Frame  # noqa: E402
+from orion.gestures import REGISTRY, load_builtins  # noqa: E402
+
+load_builtins()
+
+
+class Rig:
+    """Webcam frames (30 fps) into an OrionDo gesture; `show(hand_or_None, seconds)` returns the events."""
+
+    def __init__(self, rng=None):
+        self.g = REGISTRY["oriondo"]({"items": [{"label": str(i), "action": "input.keys", "args": {"combo": str(i)}}
+                                                 for i in range(4)]})
+        self.tr, self.t, self.rng = HandTracker(CAM), 0.0, rng
+
+    def show(self, hand, seconds):
+        out = []
+        for _ in range(round(seconds * 30)):
+            dets = [project(hand)] if hand else []
+            if dets and self.rng is not None:
+                dets = [noisy(dets[0], self.rng)]
+            out += list(self.g.update(Frame(t=self.t, hands=self.tr.update(self.t, dets), source="webcam")))
+            self.t += DT
+        return out
+
+
+def peace(y=200):
+    return facing(extended={"index", "middle"}, palm=(0, y, 0))
+
+
+def key(evs):
+    return [(e.phase, e.value) for e in evs if e.phase != "update"]
+
+
+def test_oriondo_opens_on_peace_via_webcam():
+    assert [e.phase for e in Rig().show(peace(), 0.6) if e.phase != "update"] == ["begin"]
+
+
+def test_oriondo_hovers_and_fires():
+    r = Rig()
+    r.show(peace(), 0.6)
+    evs = r.show(peace(220), 0.5)  # 20 mm up: past the deadzone, short of the pull
+    assert key(evs) == [] and [e.value["hover"] for e in evs if e.phase == "update"][-1] == 0
+    evs = r.show(peace(250), 0.5)
+    fire = [v for p, v in key(evs) if p == "fire"]
+    assert len(fire) == 1 and fire[0]["index"] == 0
+
+
+def test_oriondo_no_tap_close_from_jitter():
+    r = Rig(np.random.default_rng(3))
+    r.show(peace(), 0.6)
+    assert key(r.show(peace(), 3.0)) == []
+
+
+def test_oriondo_survives_a_short_dropout():
+    r = Rig()
+    r.show(peace(), 0.6)
+    r.show(peace(220), 0.5)
+    r.show(None, 2 * DT)  # two missed detections
+    assert [p for p, _ in key(r.show(peace(250), 0.5))] == ["fire", "end"]  # measured from the original centre
+
+
+def test_oriondo_closes_when_hand_leaves():
+    r = Rig()
+    r.show(peace(), 0.6)
+    assert key(r.show(None, 1.7)) == [("end", "lost")]
