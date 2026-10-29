@@ -64,6 +64,7 @@ glide = 0.0694             # s for the cursor to glide back onto the hand after 
 # the centre closes it. Items run any action; list order is clockwise from the top, spaced equally.
 [gestures.oriondo]
 trigger = "peace"
+skin = "aurora"          # how the pie is drawn on screen (orion/menu_skins)
 deadzone = 8
 pull = 35
 

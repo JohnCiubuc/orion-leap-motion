@@ -154,7 +154,7 @@ class Engine:
     def _oriondo(self, ev: GestureEvent):
         """Mirror the menu on the overlay; a fired item runs like any bound action."""
         v = ev.value
-        op = ({"op": "open", "labels": v["labels"]} if ev.phase == "begin" else {"op": "update", **v} if ev.phase == "update"
+        op = ({"op": "open", **v} if ev.phase == "begin" else {"op": ev.phase, **v} if ev.phase in ("enter", "back", "update")
               else {"op": "fire", "index": v["index"]} if ev.phase == "fire" else {"op": "close"})
         self._menu_open = ev.phase != "end"
         if self.overlay:

@@ -1418,3 +1418,35 @@ def test_oriondo_returning_far_away_in_a_submenu_does_not_back_or_fire():
     _, t = feed(g, t, None, 50)
     evs, _ = feed(g, t, at(o, 180, 42), 5)
     assert key_events(evs) == [] and last(evs)["hover"] is None
+
+
+# ── OrionDo: submenus through the engine ─────────────────────────────────────
+
+def _sub_engine(monkeypatch):
+    e = _menu_engine(monkeypatch)
+    e.cfg.data["gestures"]["oriondo"]["items"] = [sub(), *menu_items(1)]
+    e.build_gestures()
+    return e
+
+
+def test_engine_forwards_enter_and_back_ops(monkeypatch):
+    e = _sub_engine(monkeypatch)
+    _menu_frames(e, make_hand("left", extended={"index", "middle"}, palm=(0, 200, 0)), 60)
+    _menu_frames(e, index_hand(0, 200, side="left"), 3, 0.6)
+    _menu_frames(e, index_hand(0, 236, side="left"), 1, 0.63)  # pull the submenu
+    _menu_frames(e, index_hand(0, 200, side="left"), 1, 0.64)  # and pull back toward its parent
+    assert _op_names(e) == ["open", "enter", "back"]
+    enter, back = next(o for o in e.overlay.ops if o["op"] == "enter"), e.overlay.ops[-1]
+    assert (enter["labels"], enter["subs"], enter["back"], enter["depth"], enter["parent"]) == (["1", "2", "3"], [False] * 3, 180, 1, "S")
+    assert (back["labels"], back["subs"], back["back"], back["depth"], back["away"]) == (["S", "1"], [True, False], None, 0, 180)
+    assert e.ran == []  # entering a submenu never runs an action
+
+
+def test_open_op_carries_skin_and_subs(monkeypatch):
+    e = _menu_engine(monkeypatch)
+    _menu_frames(e, make_hand("left", extended={"index", "middle"}, palm=(0, 200, 0)), 60)
+    assert e.overlay.ops[0] == {"op": "open", "labels": ["1", "2", "3", "4"], "subs": [False] * 4, "skin": "aurora"}
+
+
+def test_default_config_names_the_aurora_skin():
+    assert Config()["gestures"]["oriondo"]["skin"] == "aurora"
