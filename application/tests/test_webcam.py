@@ -73,3 +73,58 @@ def test_degenerate_size_is_finite():
 def test_extended_hysteresis():
     assert _extended(0.72, True) and not _extended(0.72, False)
     assert _extended(0.9, False) and not _extended(0.6, True)
+
+
+# ── HandTracker ───────────────────────────────────────────────────────────────
+
+import dataclasses  # noqa: E402
+
+from orion.webcam import HandTracker  # noqa: E402
+
+DT = 1 / 30
+
+
+def noisy(det, rng, world_mm=1.0, px=1.0):
+    return dataclasses.replace(
+        det, image=det.image + rng.normal(0, px / 640, det.image.shape) * (1, 640 / 480, 0),
+        world=det.world + rng.normal(0, world_mm / 1000, det.world.shape))
+
+
+def test_ids_survive_label_flicker():
+    tr, det = HandTracker(CAM), project(facing(extended={"index", "middle"}))
+    ids = {tr.update(i * DT, [dataclasses.replace(det, label="left" if i % 2 else "right")])[0].id for i in range(30)}
+    assert len(ids) == 1
+
+
+def test_finger_debounce():
+    tr = HandTracker(CAM)
+    closed, opened = project(facing(extended={"index", "middle"})), project(facing(extended={"index", "middle", "ring"}))
+    for i in range(5):
+        tr.update(i * DT, [closed])
+    assert "ring" not in tr.update(5 * DT, [opened])[0].extended  # one frame is not enough
+    assert "ring" in tr.update(6 * DT, [opened])[0].extended  # two consecutive are
+
+
+def test_one_frame_dropout_repeats_hand():
+    tr, det = HandTracker(CAM), project(facing())
+    first = tr.update(0, [det])[0]
+    assert tr.update(DT, [])[0].id == first.id and tr.update(2 * DT, [])[0].id == first.id
+    assert tr.update(0.2, []) == ()
+
+
+def test_jitter_is_quiet():
+    tr, rng, det = HandTracker(CAM), np.random.default_rng(1), project(facing(extended={"index", "middle"}))
+    rel, speed = [], []
+    for i in range(90):
+        h = tr.update(i * DT, [noisy(det, rng)])[0]
+        if i >= 30:
+            rel.append(np.linalg.norm(h["index"].tip - h.palm))
+            speed.append(np.linalg.norm(h.velocity))
+    assert np.std(rel) < 1.0 and max(speed) < 20
+
+
+def test_velocity_tracks_motion():
+    tr = HandTracker(CAM)
+    for i in range(31):
+        h = tr.update(i * DT, [project(facing(palm=(100 * i * DT, 200, 0)))])[0]
+    assert h.velocity[0] == pytest.approx(100, rel=0.15)
