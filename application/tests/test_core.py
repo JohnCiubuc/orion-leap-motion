@@ -167,6 +167,29 @@ def test_profile_overrides_default(router):
     assert router.calls == [("t.once", "fire"), ("t.stream", "fire")]
 
 
+def test_exclusive_profile_drops_the_default_bindings(router):
+    router.configure(_with_profiles(router, {"zen": {"match": "^zen", "exclusive": True}}, [
+        {"gesture": "zoom", "action": "t.stream", "profile": "zen"},
+        {"gesture": "swipe.left", "action": "t.once"},
+        {"gesture": "swipe.right", "action": "orion.pause"},
+    ]))
+    router.window = "other"
+    router.route(ev("swipe.left"))
+    router.window = "zen"
+    router.route(ev("swipe.left"))  # a default binding: silenced
+    router.route(ev("swipe.right"))  # orion.* still works
+    for p in ("begin", "end"):
+        router.route(ev("zoom", p))  # the profile's own binding
+    assert router.calls == [("t.once", "fire"), ("orion.pause", "fire"), ("t.stream", "begin"), ("t.stream", "end")]
+    assert router.profile_exclusive
+
+
+def _with_profiles(router, profiles, bindings):
+    cfg = Config()
+    cfg.data.update(profiles=profiles, modes={}, bindings=bindings)
+    return cfg
+
+
 def test_continuous_phases_and_exclusive_mode(router):
     for p in ("begin", "update", "end"):
         router.route(ev("zoom", p))
@@ -1143,6 +1166,34 @@ def test_engine_dry_run_shows_the_menu_but_runs_nothing(monkeypatch):
     _menu_frames(e, make_hand("left", extended={"index", "middle"}, palm=(0, 200, 0)), 60)
     _menu_frames(e, index_hand(0, 236, side="left"), 1, 0.6)
     assert _op_names(e) == ["open", "fire", "close"] and e.ran == []
+
+
+def _profile_menu_engine(monkeypatch, exclusive=False):
+    e = _menu_engine(monkeypatch)
+    e.cfg.data["profiles"] = {"zen": {"match": "^zen", "exclusive": exclusive}}
+    e.router.configure(e.cfg)
+    e.build_gestures()
+    return e
+
+
+def test_profile_gets_its_own_menu(monkeypatch):
+    hand = make_hand("left", extended={"index", "middle"}, palm=(0, 200, 0))
+    for window, want in (("other", ("aurora", ["1", "2", "3", "4"], None)), ("zen", ("paper", ["Z"], 120.0))):
+        e = _profile_menu_engine(monkeypatch)
+        e.cfg.data["profiles"]["zen"]["oriondo"] = {"items": [{"label": "Z", "action": "input.keys", "args": {"combo": "z"}}], "skin": "paper", "hue": 120}
+        e.router.window = window
+        _menu_frames(e, hand, 60)
+        op = e.overlay.ops[0]
+        assert (op["skin"], op["labels"], op["hue"]) == want
+
+
+def test_exclusive_profile_without_its_own_menu_has_no_menu(monkeypatch):
+    e = _profile_menu_engine(monkeypatch, exclusive=True)
+    assert e._menu_ok()
+    e.router.window = "zen"
+    assert not e._menu_ok()
+    e.cfg.data["profiles"]["zen"]["oriondo"] = {"items": [{"label": "Z"}]}
+    assert e._menu_ok()
 
 
 def test_menu_blocked_when_paused_exclusive_or_no_overlay(monkeypatch):

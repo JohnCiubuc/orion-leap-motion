@@ -13,15 +13,26 @@
 
   const present = $derived(orion.gestures.some((g) => g.name === "oriondo"));
   const conf = () => ((orion.draft.gestures.oriondo ??= {}), orion.draft.gestures.oriondo); // reactive proxy, created on first edit
-  const list = () => (conf().items ??= []);
-  const root = $derived(orion.draft?.gestures?.oriondo?.items ?? []);
+  // The menu being edited is the main one (`gestures.oriondo`) or a profile's own (`profiles.<name>.oriondo`); settings stay global.
+  let scope = $state(""); // "" = the main menu, else a profile name
+  const profiles = $derived(Object.keys(orion.draft?.profiles ?? {}));
+  const m = $derived(scope ? orion.draft?.profiles?.[scope]?.oriondo : orion.draft?.gestures?.oriondo); // undefined: a profile without its own menu
+  const mconf = () => (scope ? orion.draft.profiles[scope].oriondo : conf());
+  $effect(() => { // a renamed or deleted profile
+    if (scope && !profiles.includes(scope)) scope = "";
+  });
+  const pick = (name) => ((scope = name), (path = []), (sel = -1));
+  const ownMenu = () => (orion.draft.profiles[scope].oriondo = { ...structuredClone($state.snapshot(orion.draft.gestures.oriondo ?? {})), items: structuredClone($state.snapshot(orion.draft.gestures.oriondo?.items ?? [])) });
+  const dropMenu = () => confirm(`Delete ${scope}'s own menu? It will use the main menu again.`) && delete orion.draft.profiles[scope].oriondo;
+  const list = () => (mconf().items ??= []);
+  const root = $derived(m?.items ?? []);
   let path = $state([]); // indices of the submenus being edited; [] is the root menu
   const here = $derived(clampPath(root, path)); // a discarded draft, a reset or a conversion can remove the level under us
   const items = $derived(listAt(root, here) ?? []);
   const back = $derived(backAt(root, here));
   const trail = $derived(crumbs(root, here));
   const enabled = $derived(orion.draft?.gestures?.oriondo?.enabled ?? true);
-  const shipped = $derived(orion.gestureDefaults.oriondo?.items);
+  const shipped = $derived(scope ? orion.draft?.gestures?.oriondo?.items : orion.gestureDefaults.oriondo?.items); // what Reset restores
   let sel = $state(-1);
   $effect(() => { // a discarded draft or a reload can shorten the list under the selection
     if (sel >= items.length) sel = items.length - 1;
@@ -49,7 +60,7 @@
     items[a].weight = wa;
     items[b].weight = wb;
   }
-  const loadDefaults = () => ((conf().items = structuredClone($state.snapshot(shipped))), goto([]));
+  const loadDefaults = () => ((mconf().items = structuredClone($state.snapshot(shipped))), goto([]));
   const menuModified = $derived(JSON.stringify($state.snapshot(root)) !== JSON.stringify($state.snapshot(shipped ?? [])));
   let labelField = $state(); // the inspector's label input, so Enter on a slice can jump to it
 
@@ -69,10 +80,10 @@
   const title = (n) => n.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
   const value = (k) => orion.draft?.gestures?.oriondo?.[k] ?? params[k]?.[0];
   const step = (range) => (range.every(Number.isInteger) ? 1 : 0.05); // on the slider's grid, so a default like 1.5 shows as 1.5
-  const settingsModified = $derived(Object.keys(params).some((k) => value(k) !== (defaults[k] ?? params[k][0])) || skin !== (defaults.skin ?? SKINS[0].id) || hue !== undefined || invert);
-  const skin = $derived(orion.draft?.gestures?.oriondo?.skin ?? SKINS[0].id);
+  const settingsModified = $derived(Object.keys(params).some((k) => value(k) !== (defaults[k] ?? params[k][0])));
+  const skin = $derived(m?.skin ?? SKINS[0].id);
   const skinHue = $derived(SKINS.find((s) => s.id === skin)?.hue ?? SKINS[0].hue);
-  const hue = $derived(orion.draft?.gestures?.oriondo?.hue); // undefined: the skin's own colour
+  const hue = $derived(m?.hue); // undefined: the skin's own colour
   // The thumbnails redraw for the menu being edited, a little after the last change (the slider fires on every pixel).
   let preview = $state({ labels: '["1","2","3","4"]' });
   $effect(() => {
@@ -81,11 +92,8 @@
     const t = setTimeout(() => (preview = next), 200);
     return () => clearTimeout(t);
   });
-  const invert = $derived(orion.draft?.gestures?.oriondo?.invert === true);
+  const invert = $derived(m?.invert === true);
   function resetSettings() {
-    conf().skin = defaults.skin ?? SKINS[0].id;
-    delete conf().hue;
-    delete conf().invert;
     for (const k of Object.keys(params)) {
       if (k in defaults) conf()[k] = defaults[k];
       else delete conf()[k]; // not in the shipped config: the engine's own default applies
@@ -115,6 +123,14 @@
 <header>
   <h1>OrionDo</h1>
   <p class="muted">A radial menu you steer with your fingertip. Pose to open, move to hover a slice, pull to fire it.</p>
+  {#if present && orion.draft && profiles.length}
+    <label class="scope"><span class="muted">Menu for</span>
+      <select value={scope} onchange={(e) => pick(e.target.value)}>
+        <option value="">Main menu (all apps)</option>
+        {#each profiles as p}<option value={p}>{p}{orion.draft.profiles[p].oriondo ? " · own menu" : ""}</option>{/each}
+      </select>
+    </label>
+  {/if}
   {#if present && orion.draft}
     <label class="power"><Switch label="Enable OrionDo" checked={enabled} onchange={(on) => (conf().enabled = on)} /> {enabled ? "On" : "Off"}</label>
   {/if}
@@ -122,6 +138,15 @@
 
 {#if !present}
   <p class="muted">This version of Orion has no OrionDo.</p>
+{:else if orion.draft && scope && !m}
+  <section class="panel box none">
+    <h2>{scope} uses the main menu</h2>
+    <p class="muted">
+      {#if orion.draft.profiles[scope].exclusive}This profile is exclusive: until it has its own menu, OrionDo will not open in its app.
+      {:else}While {scope}'s app is focused, OrionDo opens the main menu. Give it its own to change that.{/if}
+    </p>
+    <p><button onclick={ownMenu}>Give {scope} its own menu</button> <span class="muted">Starts as a copy of the main menu.</span></p>
+  </section>
 {:else if orion.draft}
   <div class="cols">
     <section class="panel wheel" class:off={!enabled}>
@@ -131,10 +156,11 @@
                  onresize={resize} onequal={() => items.forEach((it) => delete it.weight)} />
       {#if here.length}<!-- the defaults replace the whole menu: offered at the root only -->
       {:else if !items.length && shipped?.length}
-        <p class="load"><button onclick={loadDefaults}>Load the default menu</button></p>
+        <p class="load"><button onclick={loadDefaults}>Load {scope ? "the main menu" : "the default menu"}</button></p>
       {:else if shipped?.length}
-        <p class="load"><button class="ghost" onclick={loadDefaults} disabled={!menuModified}><RotateCcw size={13} /> Reset menu to defaults</button></p>
+        <p class="load"><button class="ghost" onclick={loadDefaults} disabled={!menuModified}><RotateCcw size={13} /> Reset menu to {scope ? "the main menu" : "defaults"}</button></p>
       {/if}
+      {#if scope && !here.length}<p class="load"><button class="ghost danger" onclick={dropMenu}>Use the main menu instead</button></p>{/if}
     </section>
     <div class="side">
       <section class="panel box">
@@ -146,7 +172,7 @@
         <h2>Look</h2>
         <div class="skins" role="group" aria-label="Skin">
           {#each SKINS as s (s.id)}
-            <button class:on={skin === s.id} aria-pressed={skin === s.id} onclick={() => (conf().skin = s.id)} title="{s.label} · {s.note}">
+            <button class:on={skin === s.id} aria-pressed={skin === s.id} onclick={() => (mconf().skin = s.id)} title="{s.label} · {s.note}">
               <span class="thumb"><img src={skinPreviewUrl(s.id, preview)} alt="" width="560" height="560" loading="lazy" /></span>
               <span>{s.label}</span>
             </button>
@@ -154,12 +180,12 @@
         </div>
         <label class="row">
           <span>Colour</span>
-          <input type="range" min="0" max="359" step="1" class="hue" value={hue ?? skinHue} oninput={(e) => (conf().hue = +e.target.value)} />
-          <button class="ghost" onclick={() => delete conf().hue} disabled={hue === undefined}>Reset</button>
+          <input type="range" min="0" max="359" step="1" class="hue" value={hue ?? skinHue} oninput={(e) => (mconf().hue = +e.target.value)} />
+          <button class="ghost" onclick={() => delete mconf().hue} disabled={hue === undefined}>Reset</button>
         </label>
         <label class="row">
           <span>Text</span>
-          <span class="inline"><Switch label="Invert text colour" checked={invert} onchange={(on) => (on ? (conf().invert = true) : delete conf().invert)} /> {invert ? "Inverted" : "Skin default"}</span>
+          <span class="inline"><Switch label="Invert text colour" checked={invert} onchange={(on) => (on ? (mconf().invert = true) : delete mconf().invert)} /> {invert ? "Inverted" : "Skin default"}</span>
         </label>
         <small class="muted">Colour tints the whole skin; shapes and contrast stay. Takes effect the next time the menu opens.</small>
       </section>
@@ -180,6 +206,8 @@
 
 <style>
   header { display: flex; align-items: baseline; gap: 16px; margin-bottom: 22px; flex-wrap: wrap; }
+  .scope { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .none { max-width: 560px; }
   .power { margin-left: auto; display: flex; align-items: center; gap: 8px; color: var(--dust); }
   .cols { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 18px; max-width: 1100px; align-items: start; }
   @media (max-width: 900px) { .cols { grid-template-columns: 1fr; } }

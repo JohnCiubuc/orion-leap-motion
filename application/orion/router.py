@@ -25,6 +25,7 @@ class Router:
     def configure(self, cfg):
         self.bindings = cfg["bindings"]
         self.profiles = {k: re.compile(v.get("match", "$^")) for k, v in cfg["profiles"].items()}
+        self.exclusive_profiles = {k for k, v in cfg["profiles"].items() if v.get("exclusive")}
         self.mode_cfg = cfg["modes"]
         self.engage_required = cfg.general["engage_required"]
         self.engage_window = cfg.general["engage_window"]
@@ -35,6 +36,11 @@ class Router:
     @property
     def profile(self) -> str:
         return next((name for name, rx in self.profiles.items() if rx.search(self.window)), "default")
+
+    @property
+    def profile_exclusive(self) -> bool:
+        """The focused app's profile keeps the default bindings out (like an exclusive mode, but per app)."""
+        return self.profile in self.exclusive_profiles
 
     @property
     def exclusive(self) -> bool:
@@ -73,6 +79,9 @@ class Router:
             return moded + [b for b in match if not b.get("mode") and b["action"].startswith("orion.")]
         plain = [b for b in match if not b.get("mode")]
         prof = self.profile
+        if prof in self.exclusive_profiles:  # only the profile's own bindings, plus the default orion.* controls
+            return moded + [b for b in plain if b.get("profile") == prof] + [
+                b for b in plain if b.get("profile", "default") == "default" and b["action"].startswith("orion.")]
         return moded + ([b for b in plain if b.get("profile") == prof]
                         or [b for b in plain if b.get("profile", "default") == "default"])
 

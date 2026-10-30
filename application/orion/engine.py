@@ -103,7 +103,7 @@ class Engine:
                              if conf.get(name, {}).get("enabled", True)]
             for g in self.gestures:
                 if g.name == "oriondo":
-                    g.allow = self._menu_ok
+                    g.allow, g.profile_menu = self._menu_ok, self._profile_menu
         self._menu_close()  # a rebuilt gesture has forgotten its open menu
 
     def reload_config(self, data: dict | None = None):
@@ -141,9 +141,15 @@ class Engine:
         self.emit("frame", frame)
         self._sync_ring()
 
+    def _profile_menu(self):
+        """The focused app's own OrionDo config (`[profiles.<name>.oriondo]`), or None."""
+        return self.cfg["profiles"].get(self.router.profile, {}).get("oriondo")
+
     def _menu_ok(self) -> bool:
-        """OrionDo may open: it needs the overlay to be seen, and stays out of paused and exclusive-mode use."""
-        return bool(self.overlay and self.overlay.ready) and not self.router.paused and not self.router.exclusive
+        """OrionDo may open: it needs the overlay to be seen, and stays out of paused and exclusive-mode use.
+        An exclusive profile only has the menu it owns."""
+        own_ok = not self.router.profile_exclusive or self._profile_menu() is not None
+        return bool(self.overlay and self.overlay.ready) and not self.router.paused and not self.router.exclusive and own_ok
 
     def _menu_close(self):
         if self._menu_open:

@@ -56,13 +56,15 @@
 {#if orion.draft}
   <section>
     <h2>App profiles</h2>
-    <p class="muted lead">A profile turns on when the focused window's class matches its pattern (a regular expression). The first match wins.</p>
+    <p class="muted lead">A profile turns on when the focused window's class matches its pattern (a regular expression). The first match wins. An exclusive profile silences the default bindings while its app is focused, and OrionDo opens there only if the profile has its own menu.</p>
     <div class="panel list">
       {#each Object.entries(orion.draft.profiles) as [name, p] (name)}
         <div class="row">
           <input type="text" value={name} aria-label="Profile name" onchange={(e) => rename("profiles", name, e.target.value)} />
           <label class="grow"><span class="muted">Window class pattern</span><input type="text" class="id" bind:value={p.match} /></label>
           <span class="state" class:on={matches(p.match)}>{matches(p.match) ? "Matches focused app" : "Not matching"}</span>
+          <label class="inline" title="Only this profile's own bindings fire in this app (orion.* actions still work)">
+            <Switch checked={!!p.exclusive} onchange={(on) => (p.exclusive = on)} label="Exclusive" /> Exclusive</label>
           <span class="muted n">{count("profile", name)} bindings</span>
           <button class="ghost danger" title="Delete profile and its bindings" onclick={() => remove("profiles", name)}><Trash2 size={15} /></button>
         </div>

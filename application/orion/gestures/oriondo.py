@@ -77,14 +77,15 @@ class OrionDo(Gesture):
         self.hue = _hue((overrides or {}).get("hue"))  # nor these two: the skin's colour tuning
         self.invert = (overrides or {}).get("invert") is True
         self.allow = lambda: True  # the engine vetoes opening (paused, exclusive mode, no overlay)
+        self.profile_menu = lambda: None  # the engine names the focused app's own OrionDo config, if it has one
         trigger = REGISTRY.get(self.p["trigger"])
         self.pose = trigger() if trigger and trigger.family == "pose" else None
         self.menu, self.cool = None, 0.0
 
     def reset(self):
-        allow = self.allow
+        allow, profile_menu = self.allow, self.profile_menu
         self.__init__({**self.p, "items": self.items, "skin": self.skin, "hue": self.hue, "invert": self.invert})
-        self.allow = allow
+        self.allow, self.profile_menu = allow, profile_menu
 
     def update(self, frame):
         opener = None
@@ -93,13 +94,23 @@ class OrionDo(Gesture):
                 opener = ev.hand
         if self.menu:
             yield from self._steer(frame)
-        elif opener and frame.t >= self.cool and self.items and self.allow() and frame.hand(opener):
+        elif opener and frame.t >= self.cool and self.allow() and frame.hand(opener):
+            items, skin, hue, invert = self._source()
+            if not items:
+                return
             self.menu = {"side": opener, "origin": frame.hand(opener)["index"].tip[:2].astype(np.float64),
-                         "hover": None, "seen": frame.t, "tap": FingerMotion(), "items": self.items, "back": None,
+                         "hover": None, "seen": frame.t, "tap": FingerMotion(), "items": items, "back": None,
                          "stack": [], "grace": 0.0}
-            yield GestureEvent(self.name, "begin", {"labels": _labels(self.items), "subs": _subs(self.items),
-                                                    "weights": _weights(self.items), "skin": self.skin,
-                                                    "hue": self.hue, "invert": self.invert}, opener, frame.t)
+            yield GestureEvent(self.name, "begin", {"labels": _labels(items), "subs": _subs(items), "weights": _weights(items),
+                                                    "skin": skin, "hue": hue, "invert": invert}, opener, frame.t)
+
+    def _source(self):
+        """(items, skin, hue, invert) of the menu to open: the focused app's own if its profile has one, else the main menu."""
+        own = self.profile_menu()
+        if not isinstance(own, dict):
+            return self.items, self.skin, self.hue, self.invert
+        return ([i for i in own.get("items") or [] if isinstance(i, dict)], str(own.get("skin") or "aurora"),
+                _hue(own.get("hue")), own.get("invert") is True)
 
     def _steer(self, frame):
         m, p = self.menu, self.p
