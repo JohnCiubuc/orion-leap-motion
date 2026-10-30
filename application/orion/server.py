@@ -129,10 +129,11 @@ class Server:
             weights = [min(max(float(x), 0.1), 4.0) for x in json.loads(q.get("weights", "[]"))][: len(labels)]
             weights += [1.0] * (len(labels) - len(weights))
             hue = float(q["hue"]) % 360 if "hue" in q else None
-        except (ValueError, TypeError):
+            options = {str(k): str(v) for k, v in json.loads(q.get("options", "{}")).items()}
+        except (ValueError, TypeError, AttributeError):
             raise web.HTTPBadRequest()
         try:
-            png = await asyncio.to_thread(menu_preview.png, request.match_info["name"].removesuffix(".png"), labels, weights, hue, q.get("invert") == "1")
+            png = await asyncio.to_thread(menu_preview.png, request.match_info["name"].removesuffix(".png"), labels, weights, hue, q.get("invert") == "1", options)
         except (OSError, subprocess.SubprocessError) as e:  # no system Python with pycairo
             log.warning("skin preview failed: %s", e)
             raise web.HTTPServiceUnavailable()

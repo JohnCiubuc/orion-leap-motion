@@ -7,7 +7,7 @@
   import { RotateCcw } from "@lucide/svelte";
   import { orion, skinPreviewUrl } from "../lib/link.svelte.js";
   import {
-    SKINS, weightOf, addItem, backAt, blankItem, canNest, clampPath, crumbs, isSubmenu, listAt, moveItem, removeItem, selectionAfterMove,
+    SKINS, ACCENTS, FLAVORS, weightOf, addItem, backAt, blankItem, canNest, clampPath, crumbs, isSubmenu, listAt, moveItem, removeItem, selectionAfterMove,
     selectionAfterRemove,
   } from "../lib/menu.js";
 
@@ -88,11 +88,15 @@
   let preview = $state({ labels: '["1","2","3","4"]' });
   $effect(() => {
     const labels = items.length ? items.map((i) => String(i.label ?? "")) : ["1", "2", "3", "4"];
-    const next = { labels: JSON.stringify(labels), weights: JSON.stringify(items.map(weightOf)), ...(hue === undefined ? {} : { hue }), ...(invert ? { invert: 1 } : {}) };
+    const next = { labels: JSON.stringify(labels), weights: JSON.stringify(items.map(weightOf)), ...(hue === undefined ? {} : { hue }), ...(invert ? { invert: 1 } : {}), ...(m?.options ? { options: JSON.stringify(m.options) } : {}) };
     const t = setTimeout(() => (preview = next), 200);
     return () => clearTimeout(t);
   });
   const invert = $derived(m?.invert === true);
+  const palette = $derived(SKINS.find((s) => s.id === skin)?.palette); // a fixed-palette skin: flavour and accent replace the hue
+  const flavor = $derived(m?.options?.flavor ?? "mocha");
+  const accent = $derived(m?.options?.accent ?? "mauve");
+  const setOption = (k, v) => (mconf().options = { ...$state.snapshot(mconf().options ?? {}), [k]: v });
   function resetSettings() {
     for (const k of Object.keys(params)) {
       if (k in defaults) conf()[k] = defaults[k];
@@ -178,11 +182,23 @@
             </button>
           {/each}
         </div>
+        {#if palette}
+          <div class="row"><span>Flavour</span>
+            <span class="flavors">{#each Object.keys(FLAVORS) as f}<button class:on={flavor === f} aria-pressed={flavor === f} onclick={() => setOption("flavor", f)}>{f}</button>{/each}</span>
+          </div>
+          <div class="row"><span>Accent</span>
+            <span class="swatches">{#each ACCENTS as a, k}
+              <button class="dot" class:on={accent === a} aria-pressed={accent === a} title={a} aria-label={a}
+                      style:background="#{(FLAVORS[flavor] ?? FLAVORS.mocha).split(' ')[k]}" onclick={() => setOption("accent", a)}></button>
+            {/each}</span>
+          </div>
+        {:else}
         <label class="row">
           <span>Colour</span>
           <input type="range" min="0" max="359" step="1" class="hue" value={hue ?? skinHue} oninput={(e) => (mconf().hue = +e.target.value)} />
           <button class="ghost" onclick={() => delete mconf().hue} disabled={hue === undefined}>Reset</button>
         </label>
+        {/if}
         <label class="row">
           <span>Text</span>
           <span class="inline"><Switch label="Invert text colour" checked={invert} onchange={(on) => (on ? (mconf().invert = true) : delete mconf().invert)} /> {invert ? "Inverted" : "Skin default"}</span>
@@ -227,6 +243,12 @@
   .skins .thumb { display: block; aspect-ratio: 1; overflow: hidden; border-radius: 5px; }
   .skins img { width: 125%; max-width: none; margin: -12.5%; height: auto; display: block; } /* the pie fills the middle 80% of the window */
   .look .row { display: grid; grid-template-columns: 56px 1fr auto; align-items: center; gap: 10px; font-size: 12.5px; color: var(--dust); }
+  .flavors { grid-column: 2 / 4; display: flex; gap: 4px; flex-wrap: wrap; }
+  .flavors button { padding: 3px 9px; font-size: 12px; text-transform: capitalize; }
+  .flavors button.on { background: var(--hot, #335e9e); color: var(--star); }
+  .swatches { grid-column: 2 / 4; display: flex; gap: 5px; flex-wrap: wrap; }
+  .dot { width: 20px; height: 20px; padding: 0; border-radius: 50%; border: 2px solid transparent; }
+  .dot.on { border-color: var(--star); outline: 1px solid var(--line); }
   .look .inline { grid-column: 2 / 4; display: flex; align-items: center; gap: 8px; }
   details { display: grid; gap: 12px; }
   summary { cursor: pointer; color: var(--dust); font-size: 12.5px; }

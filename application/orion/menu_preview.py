@@ -13,9 +13,9 @@ from pathlib import Path
 SIZE = 560  # the overlay window's size
 
 
-def png(name, labels, weights=None, hue=None, invert=False) -> bytes:
+def png(name, labels, weights=None, hue=None, invert=False, options=None) -> bytes:
     python = os.environ.get("ORION_OVERLAY_PYTHON") or shutil.which("python3", path="/usr/bin:/bin")
-    arg = json.dumps({"name": name, "labels": labels, "weights": weights, "hue": hue, "invert": invert})
+    arg = json.dumps({"name": name, "labels": labels, "weights": weights, "hue": hue, "invert": invert, "options": options})
     return subprocess.run([python, str(Path(__file__)), arg], capture_output=True, timeout=10, check=True).stdout
 
 
@@ -26,7 +26,7 @@ def _draw(arg):
     a = json.loads(arg)
     skin = get_skin(a["name"])
     if hasattr(skin, "tune"):
-        skin.tune(a["hue"], a["invert"])
+        skin.tune(a["hue"], a["invert"], a["options"])
     anim = MenuAnim(**skin.MOTION)
     anim.open(a["labels"], 0.0, None, a["weights"])
     anim.update(0.0, 0.5, 1 if len(a["labels"]) > 1 else 0, 0.45, 0.0)

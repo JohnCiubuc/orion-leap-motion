@@ -928,7 +928,7 @@ def key_events(evs):
 
 def test_oriondo_opens_on_trigger_pose():
     evs, _ = feed(menu(), 0.0, PEACE(), 50)
-    assert key_events(evs) == [("begin", {"labels": ["1", "2", "3", "4"], "subs": [False] * 4, "weights": [1.0] * 4, "skin": "aurora", "hue": None, "invert": False})]
+    assert key_events(evs) == [("begin", {"labels": ["1", "2", "3", "4"], "subs": [False] * 4, "weights": [1.0] * 4, "skin": "aurora", "hue": None, "invert": False, "options": {}})]
     assert {e.name for e in evs} == {"oriondo"} and {e.hand for e in evs} == {"right"}
 
 
@@ -1511,7 +1511,7 @@ def test_engine_forwards_enter_and_back_ops(monkeypatch):
 def test_open_op_carries_skin_and_subs(monkeypatch):
     e = _menu_engine(monkeypatch)
     _menu_frames(e, make_hand("left", extended={"index", "middle"}, palm=(0, 200, 0)), 60)
-    assert e.overlay.ops[0] == {"op": "open", "labels": ["1", "2", "3", "4"], "subs": [False] * 4, "weights": [1.0] * 4, "skin": "aurora", "hue": None, "invert": False}
+    assert e.overlay.ops[0] == {"op": "open", "labels": ["1", "2", "3", "4"], "subs": [False] * 4, "weights": [1.0] * 4, "skin": "aurora", "hue": None, "invert": False, "options": {}}
 
 
 def test_default_config_names_the_aurora_skin():
@@ -1615,7 +1615,7 @@ def test_anim_reduced_motion_jumps():
 
 def test_oriondo_non_dict_items_are_dropped():
     g = menu(["x", 3, *menu_items(2)])
-    assert key_events(feed(g, 0.0, PEACE(), 50)[0]) == [("begin", {"labels": ["1", "2"], "subs": [False, False], "weights": [1.0, 1.0], "skin": "aurora", "hue": None, "invert": False})]
+    assert key_events(feed(g, 0.0, PEACE(), 50)[0]) == [("begin", {"labels": ["1", "2"], "subs": [False, False], "weights": [1.0, 1.0], "skin": "aurora", "hue": None, "invert": False, "options": {}})]
     g = menu([{"label": "S", "items": ["a", 1, {"label": "ok"}]}, *menu_items(1)])
     evs, _ = feed(g, opened(g), polar(0, 36), 1)
     assert key_events(evs)[0][1]["labels"] == ["ok"]

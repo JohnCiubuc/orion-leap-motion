@@ -78,7 +78,7 @@ def test_tune_rotates_the_palette_and_flips_the_text(name):
         base, label = skin.ACCENT, skin.LABEL
         skin.tune(skin.HUE + 100, True)
         assert skin.LABEL == tuple(1 - x for x in type(skin).LABEL) and skin.LABEL_HOT == tuple(1 - x for x in type(skin).LABEL_HOT)
-        if colorsys.rgb_to_hls(*base)[2] > 0.05:  # a grey accent has no hue to move
+        if not getattr(skin, "FIXED_PALETTE", False) and colorsys.rgb_to_hls(*base)[2] > 0.05:  # a grey accent has no hue to move
             assert (hue(skin.ACCENT) - hue(base)) % 360 == pytest.approx(100, abs=1)
         skin.tune(None, False)
         assert skin.ACCENT == pytest.approx(base) and skin.LABEL == label  # not cumulative
@@ -202,3 +202,15 @@ def test_preview_png_for_every_skin(name):
     from orion.menu_preview import png
     out = png(name, ["a", "b", "c"], [1, 0.5, 2], hue=300, invert=True)
     assert out[:8] == b"\x89PNG\r\n\x1a\n" and len(out) > 2000
+
+
+def test_catppuccin_flavours_and_accents():
+    skin = get_skin("catppuccin")
+    try:
+        skin.tune(None, False, {"flavor": "latte", "accent": "blue"})
+        assert skin.HOT == pytest.approx((0x1e / 255, 0x66 / 255, 0xf5 / 255)) and skin.GLASS == pytest.approx((0xef / 255, 0xf1 / 255, 0xf5 / 255))
+        assert skin.LABEL_HOT == skin.GLASS  # latte: light text on the dark accent
+        skin.tune(None, True, {"flavor": "mocha", "accent": "nope"})  # unknown accent: mauve; invert flips only the text
+        assert skin.HOT == pytest.approx((0xcb / 255, 0xa6 / 255, 0xf7 / 255)) and skin.LABEL == pytest.approx(tuple(1 - x for x in (0xcd / 255, 0xd6 / 255, 0xf4 / 255)))
+    finally:
+        skin.tune(None, False)

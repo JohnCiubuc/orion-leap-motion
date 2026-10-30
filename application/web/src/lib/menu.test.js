@@ -4,7 +4,7 @@ import {
   MAX_ITEMS, GAP, sliceCenter, arcPath, sliceAt, dragSlot, listAt, addItem, removeItem, moveItem, blankItem,
   selectionAfterMove, selectionAfterRemove, fitLabel,
   MAX_DEPTH, slotAngles, slotLayout, slotCenter, isSubmenu, hasChildren, toSubmenu, toAction, canNest, clampPath, crumbs,
-  backAt, backAngleFor, slotSpans, weightOf, centerAt, posAt, wedgePath, edges, edgeAngle, edgeWeights, SKINS,
+  backAt, backAngleFor, slotSpans, weightOf, centerAt, posAt, wedgePath, edges, edgeAngle, edgeWeights, SKINS, ACCENTS, FLAVORS,
 } from "./menu.js";
 
 const near = (a, b, eps = 1e-6) => assert.ok(Math.abs(a - b) < eps, `${a} !≈ ${b}`);
@@ -247,5 +247,9 @@ test("edgeWeights moves the border under the pointer and keeps the pair's sum", 
 
 test("SKINS lists unique ids with a hue", () => {
   assert.equal(new Set(SKINS.map((s) => s.id)).size, SKINS.length);
-  assert.ok(SKINS.every((s) => s.hue >= 0 && s.hue < 360));
+  assert.ok(SKINS.every((s) => s.palette || (s.hue >= 0 && s.hue < 360)));
+});
+
+test("every Catppuccin flavour lists one swatch per accent", () => {
+  for (const hexes of Object.values(FLAVORS)) assert.equal(hexes.split(" ").length, ACCENTS.length);
 });

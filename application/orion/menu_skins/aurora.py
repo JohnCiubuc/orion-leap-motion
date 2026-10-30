@@ -40,8 +40,9 @@ class Aurora:
     LABEL_R, CHEV_R = (R_IN + R_OUT) / 2, R_OUT - 15  # px from the centre at sc = 1
     PALETTE = ("INK", "GLASS", "GLASS_HI", "HOT", "ACCENT")
 
-    def tune(self, hue=None, invert=False):
-        """Recolour for the next menu: `hue` (degrees, None keeps the skin's own) and `invert` for the text colours."""
+    def tune(self, hue=None, invert=False, options=None):
+        """Recolour for the next menu: `hue` (degrees, None keeps the skin's own) and `invert` for the text colours.
+        `options` is the skin's own choices (a palette skin reads its flavour and accent from it); most skins ignore it."""
         shift = 0.0 if hue is None else (hue - self.HUE) / 360
         base = type(self)
         for name in self.PALETTE:
@@ -86,6 +87,7 @@ class Aurora:
         cr.fill()
 
     def _slices(self, cr, cairo, ox, oy, slices, picked=None, leave=0.0):
+        self.origin = (ox, oy)  # for skins that draw lines to the centre
         for i, s in enumerate(slices):
             half = max(s.span / 2 - GAP / 2, 0.01)
             if s.alpha <= 0.002 or s.scale <= 0.002:

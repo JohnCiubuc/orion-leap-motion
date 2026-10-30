@@ -19,7 +19,18 @@ export const SKINS = [
   { id: "compass", label: "Compass", note: "Bezel and needle", hue: 40 },
   { id: "neon", label: "Neon", note: "Glowing tubes", hue: 313 },
   { id: "petal", label: "Petal", note: "Soft petals", hue: 44 },
+  { id: "constellation", label: "Constellation", note: "Stars and lines", hue: 223 },
+  { id: "topographic", label: "Topographic", note: "Contour lines", hue: 135 },
+  { id: "catppuccin", label: "Catppuccin", note: "Four flavours", palette: true }, // a fixed palette: flavour and accent instead of a hue
 ];
+// Catppuccin's accents per flavour (orion/menu_skins/catppuccin.py has the full palette): what the accent swatches show.
+export const ACCENTS = ["rosewater", "flamingo", "pink", "mauve", "red", "maroon", "peach", "yellow", "green", "teal", "sky", "sapphire", "blue", "lavender"];
+export const FLAVORS = {
+  latte: "dc8a78 dd7878 ea76cb 8839ef d20f39 e64553 fe640b df8e1d 40a02b 179299 04a5e5 209fb5 1e66f5 7287fd",
+  frappe: "f2d5cf eebebe f4b8e4 ca9ee6 e78284 ea999c ef9f76 e5c890 a6d189 81c8be 99d1db 85c1dc 8caaee babbf1",
+  macchiato: "f4dbd6 f0c6c6 f5bde6 c6a0f6 ed8796 ee99a0 f5a97f eed49f a6da95 8bd5ca 91d7e3 7dc4e4 8aadf4 b7bdf8",
+  mocha: "f5e0dc f2cdcd f5c2e7 cba6f7 f38ba8 eba0ac fab387 f9e2af a6e3a1 94e2d5 89dceb 74c7ec 89b4fa b4befe",
+};
 export const GAP = (3 * Math.PI) / 180;
 
 // ── Geometry (angles in radians, clockwise from the top; SVG y points down) ──

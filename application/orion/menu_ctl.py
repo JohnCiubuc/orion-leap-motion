@@ -42,7 +42,7 @@ class MenuController:
             return
         self.skin = skin
         if hasattr(skin, "tune"):
-            skin.tune(msg.get("hue"), msg.get("invert", False))
+            skin.tune(msg.get("hue"), msg.get("invert", False), msg.get("options"))
         self.anim = self.anim_factory(reduced_motion=self.reduced, **skin.MOTION)
         self.anim.open(msg["labels"], now, msg.get("subs"), msg.get("weights"))
 
