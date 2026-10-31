@@ -55,6 +55,8 @@ class Merger:
         if mp is None or age > self.cfg["max_age"] or mp.side != leap.side:
             return leap
         a, b = _basis(leap), _basis(mp)
+        if a is not None and b is not None and a[:, 2] @ b[:, 2] < 0:
+            return leap  # the palms face opposite ways: MediaPipe's hand is flipped, and rotating it would mirror the fingers
         R = a @ b.T if a is not None and b is not None else np.eye(3)  # MediaPipe's palm frame → the Leap's (its tilt is off by 15-25°)
         thumb = self._thumb_out(thumb_lateral(mp))
         fingers = tuple(Finger(f.name, thumb if f.name == "thumb" else f.extended,

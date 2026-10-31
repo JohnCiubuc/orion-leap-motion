@@ -171,3 +171,10 @@ def test_engine_starts_the_leap_hybrid_source(tmp_path, monkeypatch):
     engine.start()
     assert isinstance(engine.source, LeapHybridSource)
     assert engine.source.cfg["cameras"] == "left" and engine.source.merger.cfg["thumb_out"] == 45
+
+
+def test_merge_ignores_a_mediapipe_hand_facing_the_other_way():
+    # A flipped palm normal would turn the rotation into a 180° flip and mirror the fingers through the palm.
+    leap = make_hand()
+    mp = dataclasses.replace(skewed(leap), normal=-skewed(leap).normal)
+    assert Merger(CFG)(leap, mp, 0.0) is leap
