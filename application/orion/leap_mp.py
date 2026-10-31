@@ -11,7 +11,8 @@ from typing import Callable
 
 import numpy as np
 
-from .webcam import PALM_LM, Cam, Detection, apparent_depth
+from .frame import Hand
+from .webcam import PALM_LM, Cam, Detection, HandTracker, _Track, apparent_depth, points_to_hand
 
 LEAP_Z_SIGN = 1  # shortcut: image-down → toward the user is a guess, confirmed against Leap's own tracking in the live bring-up
 SWAP_CAMERAS = False  # shortcut: assumes stereo_left is the physical left camera, confirmed in the live bring-up
@@ -167,3 +168,46 @@ def mediapipe_backend():
                  cats[0].category_name.lower(), cats[0].score)
                 for img, world, cats in zip(r.hand_landmarks, r.hand_world_landmarks, r.handedness)]
     return backend
+
+
+# ── Two views, one hand ───────────────────────────────────────────────────────
+
+class Fusion:
+    """Turns the two cameras' views into one steady `Hand`: triangulated when they agree, from one camera when only one
+    sees the hand, and dropped (after a short hold) when they disagree. `cfg`: `agree_px`, `hold`, `hand_mm`."""
+
+    def __init__(self, cfg: dict, pinhole: Pinhole = Pinhole(), baseline: float = 40.0):
+        self.cfg, self.pinhole, self.baseline = cfg, pinhole, baseline
+        self.smoother, self.track = HandTracker(Cam()), _Track(1)  # one hand: one track, smoothed like the webcam's
+
+    def update(self, t: float, left: View | None, right: View | None) -> tuple[tuple[Hand, ...], str]:
+        if SWAP_CAMERAS:
+            left, right = right, left
+        if left and right:
+            if not agreement(left.px, right.px, self.pinhole, self.baseline, self.cfg["agree_px"]):
+                return self._held(t), "disagree"
+            points, status = triangulate(left.px, right.px, self.pinhole, self.baseline), "agree"
+        elif left or right:
+            view = left or right
+            points = backproject(view, self.pinhole, self.cfg["hand_mm"])
+            status = "left only" if left else "right only"
+            if right:
+                points = points + (self.baseline, 0, 0)  # the right camera's frame sits `baseline` mm to the right of the left's
+        else:
+            return self._held(t), "none"
+        best = max((v for v in (left, right) if v), key=lambda v: v.score)
+        w = to_leap_axes(points, self.baseline)
+        palm = w[list(PALM_LM)].mean(axis=0).astype(np.float32)
+        label = best.label if not LABEL_FLIP else ("left" if best.label == "right" else "right")
+        hand = self.smoother._smooth(t, self.track, points_to_hand(w, palm, label, best.score, self.track.extended, 1))
+        self.track.hand, self.track.seen = hand, t
+        return (hand,), status
+
+    def _held(self, t: float) -> tuple[Hand, ...]:
+        """The last hand while a miss is shorter than `hold`; after that the track starts over."""
+        if self.track.hand is None:
+            return ()
+        if t - self.track.seen <= self.cfg["hold"]:
+            return (self.track.hand,)
+        self.track = _Track(1)
+        return ()

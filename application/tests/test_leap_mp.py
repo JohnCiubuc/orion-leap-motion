@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from orion.leap_mp import LEAP_Z_SIGN, HandFinder, Pinhole, Rectifier, View, agreement, backproject, crop_around, search_windows, to_leap_axes, triangulate
+from orion.leap_mp import LEAP_Z_SIGN, Fusion, HandFinder, Pinhole, Rectifier, View, agreement, backproject, crop_around, search_windows, to_leap_axes, triangulate
 from orion.webcam import PALM_LM
 
 
@@ -131,3 +131,49 @@ def test_mediapipe_backend_finds_nothing_in_a_blank_crop():
     if not MODEL_FILE.exists():
         pytest.skip("hand model not downloaded yet")
     assert mediapipe_backend()(np.zeros((240, 240), np.uint8)) == []
+
+
+# ── Fusion ────────────────────────────────────────────────────────────────────
+
+CFG = {"agree_px": 4.0, "hold": 0.08, "hand_mm": 95}
+
+
+def views(pts):
+    """What the two finders would report for camera-frame points `pts`."""
+    world = (pts - pts[list(PALM_LM)].mean(axis=0)) / 1000
+    left, right = project_pair(pts)
+    return View(left, world, "right", 0.9), View(right, world, "right", 0.8)
+
+
+def expected_palm(pts):
+    return to_leap_axes(pts, BASELINE)[list(PALM_LM)].mean(axis=0)
+
+
+def test_fusion_agree_gives_a_metric_palm():
+    pts = scene()
+    (hand,), status = Fusion(CFG).update(0.0, *views(pts))
+    assert status == "agree" and hand.palm == pytest.approx(expected_palm(pts), abs=2)
+
+
+def test_fusion_one_camera_still_gives_a_hand():
+    pts = scene(flat=True)
+    left, right = views(pts)
+    cfg = {**CFG, "hand_mm": float(np.linalg.norm(pts[9] - pts[0]))}  # hand_mm is the user's real wrist-to-knuckle length
+    for lv, rv, want in ((None, right, "right only"), (left, None, "left only")):
+        (hand,), status = Fusion(cfg).update(0.0, lv, rv)
+        assert status == want
+        assert hand.palm == pytest.approx(expected_palm(pts), abs=15)  # a view alone is only as good as its size estimate; a right-only view must still be shifted into the left camera's frame
+
+
+def test_fusion_disagree_holds_then_drops_then_recovers():
+    pts = scene()
+    fusion = Fusion(CFG)
+    (good,), _ = fusion.update(0.0, *views(pts))
+    left, right = views(pts)
+    right.px = right.px + (0, 10)  # the two cameras no longer see the same hand
+    held, status = fusion.update(0.05, left, right)
+    assert status == "disagree" and held == (good,)
+    assert fusion.update(0.2, left, right) == ((), "disagree")
+    assert fusion.update(0.3, None, None) == ((), "none")
+    (again,), status = fusion.update(0.4, *views(pts))
+    assert status == "agree" and again.id == 1
