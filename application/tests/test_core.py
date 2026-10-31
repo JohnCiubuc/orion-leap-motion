@@ -1707,3 +1707,50 @@ def test_recorded_touches_do_not_trigger_other_gestures():
     assert all(inside(t, "ok") for t in begins["ok"]), begins["ok"]
     assert any(inside(t, "peace") for t in begins["peace"])  # (a stray peace at the very end, on the relaxed hand, predates this)
     assert all(inside(t, "fist") for t in begins["fist"]) and begins["fist"], begins["fist"]
+
+
+# ── LeapSource hooks ──────────────────────────────────────────────────────────
+
+def fake_leap_images(*fills):
+    """Two 640×240 LEAP_IMAGE structs backed by C buffers filled with `fills`, as the listener receives them."""
+    from types import SimpleNamespace as NS
+    from leapc_cffi import ffi
+    keep, images = [], []
+    for fill in fills:
+        buf, img = ffi.new("uint8_t[]", [fill] * (640 * 240)), ffi.new("LEAP_IMAGE*")
+        img.properties.width, img.properties.height, img.properties.bpp = 640, 240, 1
+        img.data, img.offset = ffi.cast("void*", buf), 0
+        keep += [buf, img]
+        images.append(NS(c_data=img[0]))
+    return NS(image=images, keep=keep)
+
+
+def test_leap_source_tracking_hook_emits_a_frame():
+    from types import SimpleNamespace as NS
+    from orion.sources import LeapSource
+    v = lambda x, y, z: NS(x=x, y=y, z=z)  # noqa: E731
+    bone = NS(prev_joint=v(0, 0, 0), next_joint=v(0, 10, 0))
+    palm = NS(position=v(1, 2, 3), stabilized_position=v(1, 2, 3), velocity=v(0, 0, 0), normal=v(0, -1, 0), direction=v(0, 0, -1))
+    hand = NS(id=7, type="HandType.Left", confidence=.8, pinch_strength=.1, grab_strength=.2, palm=palm,
+              digits=[NS(is_extended=True, bones=[bone] * 4)] * 5)
+    frames = []
+    LeapSource(frames.append, lambda img: None)._tracking(NS(timestamp=2_000_000, framerate=110.0, hands=[hand]))
+    assert len(frames) == 1 and frames[0].t == 2.0
+
+
+def test_raw_images_copies_both_cameras():
+    pytest.importorskip("leapc_cffi")
+    from orion.sources import raw_images
+    event = fake_leap_images(7, 9)
+    got = raw_images(event)
+    assert [(w, h, set(px)) for w, h, px in got] == [(640, 240, {7}), (640, 240, {9})]
+
+
+def test_images_hook_stacks_the_pair_for_the_ui():
+    pytest.importorskip("leapc_cffi")
+    from orion.sources import LeapSource
+    sent = []
+    src = LeapSource(lambda f: None, sent.append)
+    src.ir = True
+    src._images(fake_leap_images(1, 2))
+    assert (sent[0].width, sent[0].height) == (640, 480) and sent[0].pixels[0] == 1 and sent[0].pixels[-1] == 2
