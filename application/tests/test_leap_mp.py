@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from orion.leap_mp import LEAP_Z_SIGN, Pinhole, Rectifier, View, agreement, backproject, to_leap_axes, triangulate
+from orion.leap_mp import LEAP_Z_SIGN, HandFinder, Pinhole, Rectifier, View, agreement, backproject, crop_around, search_windows, to_leap_axes, triangulate
 from orion.webcam import PALM_LM
 
 
@@ -78,3 +78,56 @@ def test_agreement():
     assert not agreement(left, right + (0, 10), PIN, BASELINE, 4.0)  # rows disagree
     assert not agreement(right, left, PIN, BASELINE, 4.0)  # swapped: negative disparity
     assert not agreement(*project_pair(scene(z=700)), PIN, BASELINE, 4.0)  # too far to be a hand over the device
+
+
+# ── Crops and the per-camera hand finder ──────────────────────────────────────
+
+def test_search_windows_cover_the_frame():
+    assert search_windows(640, 240) == [(0, 0, 240), (200, 0, 240), (400, 0, 240)]
+
+
+def test_crop_around_stays_inside_the_frame():
+    x0, y0, s = crop_around((630, 10), 200, 640, 240)
+    assert (s, x0 + s <= 640, y0 >= 0, y0 + s <= 240) == (200, True, True, True)
+    assert crop_around((320, 120), 10, 640, 240)[2] == 96  # never smaller than MediaPipe can use
+    assert crop_around((320, 120), 900, 640, 240)[2] == 240  # nor taller than the frame
+
+
+def hand_at_centre(score=0.9):
+    return (np.full((21, 2), 0.5), np.zeros((21, 3)), "right", score)
+
+
+def scripted(answers):
+    """A backend that answers from a list and records (crop's first pixel, crop side) per call."""
+    calls = []
+
+    def backend(crop):
+        calls.append((float(crop[0, 0]), crop.shape[0]))
+        return answers[len(calls) - 1]
+    return backend, calls
+
+
+def test_finder_searches_then_tracks_then_gives_up():
+    gray = np.tile(np.arange(640, dtype=np.float32), (240, 1))  # pixel value = its column, so a crop's first pixel is its x0
+    backend, calls = scripted([[], [], [hand_at_centre()], [hand_at_centre()], [], [], [], []])
+    finder = HandFinder(backend)
+    views = [finder.find(gray) for _ in range(8)]
+    assert [c[0] for c in calls[:3]] == [0, 200, 400] and calls[0][1] == 240  # one search window per frame
+    assert views[0] is None and views[1] is None
+    assert views[2].px.mean(axis=0) == pytest.approx((520, 120))  # crop coordinates mapped back to the frame
+    assert calls[3] == (472.0, 96)  # tracking: a small window centred on the hand
+    assert calls[7][0] == 0  # three misses in a row: back to searching from the first window
+
+
+def test_finder_ignores_low_scores():
+    backend, _ = scripted([[hand_at_centre(score=0.3)]])
+    assert HandFinder(backend).find(np.zeros((240, 640), np.uint8)) is None
+
+
+def test_mediapipe_backend_finds_nothing_in_a_blank_crop():
+    pytest.importorskip("mediapipe")
+    from orion.leap_mp import mediapipe_backend
+    from orion.webcam import MODEL_FILE
+    if not MODEL_FILE.exists():
+        pytest.skip("hand model not downloaded yet")
+    assert mediapipe_backend()(np.zeros((240, 240), np.uint8)) == []

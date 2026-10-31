@@ -97,3 +97,73 @@ def agreement(left_px: np.ndarray, right_px: np.ndarray, pinhole: Pinhole, basel
     if int((d > 0).sum()) < MIN_AGREEING:
         return False
     return DEPTH_MM[0] <= float(np.median(pinhole.f * baseline / d[d > 0])) <= DEPTH_MM[1]
+
+
+# ── Finding a hand in one camera ──────────────────────────────────────────────
+
+CROP_SCALE = 1.6  # tracking window = this × the hand's bounding-box side (about 2.5× the palm)
+CROP_MIN = 96  # px; MediaPipe's palm detector needs the hand at a usable size
+LOST_AFTER = 3  # consecutive misses before searching the whole frame again
+CROP_INPUT = 256  # px; what MediaPipe is given
+
+
+def search_windows(w: int, h: int) -> list[tuple[int, int, int]]:
+    """Square `(x0, y0, side)` windows that together cover a wide, short frame: tried one per frame while no hand is tracked."""
+    side = min(w, h)
+    return [(round(x), 0, side) for x in np.linspace(0, w - side, 3)]
+
+
+def crop_around(center: tuple[float, float], side: float, w: int, h: int) -> tuple[int, int, int]:
+    """Square window of about `side` px centred on `center`, kept inside the frame."""
+    s = round(min(max(side, CROP_MIN), min(w, h)))
+    return (int(min(max(round(center[0] - s / 2), 0), w - s)), int(min(max(round(center[1] - s / 2), 0), h - s)), s)
+
+
+class HandFinder:
+    """One camera's hand: searches the frame window by window, then follows the hand with a tight crop.
+
+    `backend(crop)` returns `[(landmarks (21, 2) in 0..1 of the crop, world (21, 3), label, score)]`."""
+
+    def __init__(self, backend, pinhole: Pinhole = Pinhole(), min_score: float = 0.5):
+        self.backend, self.pinhole, self.min_score = backend, pinhole, min_score
+        self.center = self.side = None
+        self.misses = self.searched = 0
+
+    def find(self, gray: np.ndarray) -> View | None:
+        h, w = gray.shape[:2]
+        if self.center is None:
+            x0, y0, s = search_windows(w, h)[self.searched % 3]
+            self.searched += 1
+        else:
+            x0, y0, s = crop_around(self.center, CROP_SCALE * self.side, w, h)
+        found = [r for r in self.backend(gray[y0:y0 + s, x0:x0 + s]) if r[3] >= self.min_score]
+        if not found:
+            self.misses += 1
+            if self.center is not None and self.misses >= LOST_AFTER:
+                self.center, self.searched = None, 0
+            return None
+        norm, world, label, score = max(found, key=lambda r: r[3])
+        px = np.column_stack((x0 + norm[:, 0] * s, y0 + norm[:, 1] * s))
+        self.center, self.side, self.misses = px[list(PALM_LM)].mean(axis=0), float(np.ptp(px, axis=0).max()), 0
+        return View(px, world, label, score)
+
+
+def mediapipe_backend():
+    """The real backend for `HandFinder`: one single-image MediaPipe hand landmarker, crops upscaled to 256 px."""
+    import cv2
+    import mediapipe as mp
+    from mediapipe.tasks import python as tasks
+    from mediapipe.tasks.python import vision
+
+    from .webcam import ensure_model
+    landmarker = vision.HandLandmarker.create_from_options(vision.HandLandmarkerOptions(
+        base_options=tasks.BaseOptions(model_asset_path=str(ensure_model())),
+        running_mode=vision.RunningMode.IMAGE, num_hands=1))
+
+    def backend(crop):
+        rgb = cv2.cvtColor(cv2.resize(crop, (CROP_INPUT, CROP_INPUT)), cv2.COLOR_GRAY2RGB)
+        r = landmarker.detect(mp.Image(image_format=mp.ImageFormat.SRGB, data=np.ascontiguousarray(rgb)))
+        return [(np.array([(p.x, p.y) for p in img]), np.array([(p.x, p.y, p.z) for p in world]),
+                 cats[0].category_name.lower(), cats[0].score)
+                for img, world, cats in zip(r.hand_landmarks, r.hand_world_landmarks, r.handedness)]
+    return backend
