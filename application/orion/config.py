@@ -31,7 +31,7 @@ class Config:
     def load(self):
         defaults = tomllib.loads(DEFAULT_FILE.read_text())
         self.data = tomllib.loads(self.path.read_text())
-        for table in ("general", "overlay", "webcam", "leap_mp"):  # settings tables always carry every default key
+        for table in ("general", "overlay", "webcam", "leap_mp", "leap_hybrid"):  # settings tables always carry every default key
             self.data[table] = {**defaults[table], **self.data.get(table, {})}
         for key in ("gestures", "profiles", "modes"):
             self.data.setdefault(key, {})

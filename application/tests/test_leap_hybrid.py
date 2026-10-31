@@ -147,3 +147,27 @@ def test_hybrid_worker_publishes_instead_of_emitting_frames():
     left.view, right.view = views(scene())
     src._process(PAIR, 0.0)
     assert frames == [] and src._latest[1] is not None
+
+
+# ── Config and engine ─────────────────────────────────────────────────────────
+
+def test_leap_hybrid_defaults_load(tmp_path):
+    from orion.config import Config
+    path = tmp_path / "config.toml"
+    path.write_text("[leap_hybrid]\nmax_age = 0.2\n")
+    assert Config(path)["leap_hybrid"] == {"max_age": 0.2, "thumb_out": 45}
+
+
+def test_engine_starts_the_leap_hybrid_source(tmp_path, monkeypatch):
+    from orion.actions import hyprland
+    from orion.config import Config
+    from orion.engine import Engine
+    from orion.sources import Source
+    monkeypatch.setattr(Source, "start", lambda self: None)  # no device threads in a unit test
+    monkeypatch.setattr(hyprland, "watch_active_window", lambda fn: None)
+    path = tmp_path / "config.toml"
+    path.write_text('[general]\nsource = "leap_hybrid"\n')
+    engine = Engine(Config(path), dry_run=True)
+    engine.start()
+    assert isinstance(engine.source, LeapHybridSource)
+    assert engine.source.cfg["cameras"] == "left" and engine.source.merger.cfg["thumb_out"] == 45

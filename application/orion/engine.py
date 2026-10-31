@@ -21,6 +21,7 @@ from .gestures.paths import PathGesture
 from .handedness import Handedness
 from .router import Router
 from .sources import DemoSource, LeapSource, Recorder, ReplaySource
+from .leap_hybrid import LeapHybridSource
 from .leap_mp import LeapMediaPipeSource
 from .webcam import WebcamSource
 
@@ -77,9 +78,11 @@ class Engine:
 
     def start(self, replay: str | None = None):
         kind = "demo" if self.demo else self.cfg.general["source"]
-        cls = ReplaySource if replay else {"demo": DemoSource, "webcam": WebcamSource, "leap_mp": LeapMediaPipeSource}.get(kind, LeapSource)
+        cls = (ReplaySource if replay else {"demo": DemoSource, "webcam": WebcamSource, "leap_mp": LeapMediaPipeSource,
+                                            "leap_hybrid": LeapHybridSource}.get(kind, LeapSource))
         kw = ({"path": replay} if replay else {"cfg": self.cfg["webcam"]} if cls is WebcamSource
-              else {"cfg": self.cfg["leap_mp"]} if cls is LeapMediaPipeSource else {})
+              else {"cfg": self.cfg["leap_mp"]} if cls is LeapMediaPipeSource
+              else {"cfg": self.cfg["leap_mp"], "hybrid": self.cfg["leap_hybrid"]} if cls is LeapHybridSource else {})
         self.source = cls(self.on_frame, lambda img: self.emit("image", img),
                           ir_fps=self.cfg.general["ir_fps"], **kw)
         self.source.start()
