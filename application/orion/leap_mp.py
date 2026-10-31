@@ -5,15 +5,20 @@ The geometry, crop and fusion code is pure numpy; `cv2` and `mediapipe` are impo
 
 from __future__ import annotations
 
+import logging
 import math
+import threading
+import time
 from dataclasses import dataclass
 from typing import Callable
 
 import numpy as np
 
-from .frame import Hand
+from .frame import Frame, Hand, IRImage, from_leap
+from .sources import LeapSource, raw_images
 from .webcam import PALM_LM, Cam, Detection, HandTracker, _Track, apparent_depth, points_to_hand
 
+log = logging.getLogger(__name__)
 LEAP_Z_SIGN = 1  # shortcut: image-down → toward the user is a guess, confirmed against Leap's own tracking in the live bring-up
 SWAP_CAMERAS = False  # shortcut: assumes stereo_left is the physical left camera, confirmed in the live bring-up
 LABEL_FLIP = False  # shortcut: assumes MediaPipe's hand label is right for this view, confirmed in the live bring-up
@@ -211,3 +216,127 @@ class Fusion:
             return (self.track.hand,)
         self.track = _Track(1)
         return ()
+
+
+# ── Preview ───────────────────────────────────────────────────────────────────
+
+def preview(left: np.ndarray, right: np.ndarray, view_left: View | None, view_right: View | None) -> IRImage:
+    """The rectified pair stacked for the IR view, with each found hand's landmarks as bright dots."""
+    out = []
+    for img, view in ((left, view_left), (right, view_right)):
+        img = img.copy()
+        if view is not None:
+            for x, y in np.rint(view.px).astype(int):
+                img[max(y - 1, 0):y + 2, max(x - 1, 0):x + 2] = 255
+        out.append(img)
+    return IRImage(left.shape[1], left.shape[0] * 2, np.vstack(out).tobytes())
+
+
+# ── The source ────────────────────────────────────────────────────────────────
+
+def leapc_rectifier(conn) -> Rectifier:
+    """A `Rectifier` over the connected device's own lens calibration, with `.baseline` (mm) read from its camera extrinsics."""
+    from leapc_cffi import ffi, libleapc
+    ptr = conn.get_connection_ptr()
+    cameras = {"left": libleapc.eLeapPerspectiveType_stereo_left, "right": libleapc.eLeapPerspectiveType_stereo_right}
+    ray = ffi.new("LEAP_VECTOR*")
+
+    def project(camera, r):
+        ray.x, ray.y, ray.z = r
+        pixel = libleapc.LeapRectilinearToPixel(ptr, cameras[camera], ray[0])
+        return pixel.x, pixel.y
+
+    rectifier = Rectifier(project)
+    x = {}
+    for name, camera in cameras.items():
+        m = ffi.new("float[16]")
+        libleapc.LeapExtrinsicCameraMatrix(ptr, camera, m)
+        x[name] = m[12]  # the camera's offset along the device's x axis
+    baseline = x["right"] - x["left"]
+    rectifier.baseline = baseline if 20.0 <= baseline <= 80.0 else 40.0  # shortcut: a Leap's cameras are 40 mm apart, so an odd reading means the calibration was not ready
+    return rectifier
+
+
+class LeapMediaPipeSource(LeapSource):
+    """The Leap's two IR cameras, tracked by MediaPipe instead of the Leap's own hand model."""
+    name = "leap_mp"
+    always_images = True
+
+    def __init__(self, on_frame, on_image, ir_fps: float = 30, *, cfg: dict, rectifier_factory=None, finder_factory=None):
+        super().__init__(on_frame, on_image, ir_fps)
+        self.cfg = cfg
+        self.rectifier_factory = rectifier_factory or leapc_rectifier
+        self.finder_factory = finder_factory or (lambda: HandFinder(mediapipe_backend(), min_score=cfg["min_score"]))
+        self.on_reference = None  # optional callback for Leap's own frames (the compare script)
+        self._slot, self._dropped, self._wake, self._lock = None, 0, threading.Event(), threading.Lock()
+        self._rect = self._fusion = self._finders = self._worker = None
+        self._broken, self._fps, self._last = False, 0.0, 0.0
+
+    # ── LeapSource hooks ──────────────────────────────────────────────────────
+
+    def _tracking(self, e):
+        if self.on_reference:
+            self.on_reference(from_leap(e))
+
+    def _images(self, e):
+        self._offer(tuple(np.frombuffer(px, np.uint8).reshape(h, w) for w, h, px in raw_images(e)))
+
+    def _on_open(self, conn):
+        if self._worker is None:
+            self._worker = threading.Thread(target=self._work, name="leap-mp", daemon=True)
+            self._worker.start()
+
+    # ── Worker ────────────────────────────────────────────────────────────────
+
+    def _offer(self, pair):
+        """Keep only the newest pair: MediaPipe is slower than the cameras, and old frames would only add latency."""
+        with self._lock:
+            self._dropped += self._slot is not None
+            self._slot = pair
+        self._wake.set()
+
+    def _work(self):
+        while not self._stop.is_set():
+            if not self._wake.wait(0.5):
+                continue
+            with self._lock:
+                pair, self._slot = self._slot, None
+                self._wake.clear()
+            if pair is not None:
+                self._process(pair, time.monotonic())
+
+    def _setup(self) -> bool:
+        """Build the rectifier and finders on the first pair (the calibration is only readable once images flow)."""
+        if self._broken:
+            return False
+        try:
+            self._rect = self.rectifier_factory(getattr(self, "_conn", None))
+            self._finders = (self.finder_factory(), self.finder_factory())
+            self._fusion = Fusion(self.cfg, baseline=getattr(self._rect, "baseline", 40.0))
+            self.status["error"] = ""
+        except ImportError as e:
+            self._broken = True
+            self.status["error"] = f'The Leap (MediaPipe) source needs the "webcam" extra: pip install -e ".[webcam]" ({e})'
+        except Exception as e:
+            self._rect = self._fusion = None
+            self.status["error"] = f"Could not set up the Leap (MediaPipe) source: {e}"
+            log.warning("leap_mp: setup failed: %s", e)
+        return self._fusion is not None
+
+    def _process(self, pair, t: float):
+        try:
+            if self._fusion is None and not self._setup():
+                return self._emit(t, ())
+            left, right = (self._rect.rectify(c, img) for c, img in zip(("left", "right"), pair))
+            views = (self._finders[0].find(left), self._finders[1].find(right))
+            hands, self.status["agreement"] = self._fusion.update(t, *views)
+            self._emit(t, hands)
+            self._emit_ir(lambda: preview(left, right, *views))
+        except Exception:  # one bad frame must not end the stream: the menu and the watchdog both run on frames
+            log.exception("leap_mp: frame failed")
+            self._emit(t, ())
+
+    def _emit(self, t: float, hands):
+        self._fps += (1 / max(t - self._last, 1e-3) - self._fps) * 0.1
+        self._last = t
+        self.on_frame(Frame(t=t, fps=self._fps, hands=tuple(hands), source="leap_mp"))

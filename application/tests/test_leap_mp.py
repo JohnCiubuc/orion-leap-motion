@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from orion.leap_mp import LEAP_Z_SIGN, Fusion, HandFinder, Pinhole, Rectifier, View, agreement, backproject, crop_around, search_windows, to_leap_axes, triangulate
+from orion.leap_mp import LEAP_Z_SIGN, Fusion, HandFinder, LeapMediaPipeSource, Pinhole, Rectifier, View, agreement, backproject, crop_around, preview, search_windows, to_leap_axes, triangulate
 from orion.webcam import PALM_LM
 
 
@@ -177,3 +177,82 @@ def test_fusion_disagree_holds_then_drops_then_recovers():
     assert fusion.update(0.3, None, None) == ((), "none")
     (again,), status = fusion.update(0.4, *views(pts))
     assert status == "agree" and again.id == 1
+
+
+# ── The source ────────────────────────────────────────────────────────────────
+
+class FakeRectifier:
+    def rectify(self, camera, gray):
+        return gray
+
+
+class FakeFinder:
+    def __init__(self, view=None):
+        self.view, self.boom = view, False
+
+    def find(self, gray):
+        if self.boom:
+            raise RuntimeError("detector blew up")
+        return self.view
+
+
+def make_source(finders=None):
+    frames, images = [], []
+    finders = finders or [FakeFinder(), FakeFinder()]
+    src = LeapMediaPipeSource(frames.append, images.append, cfg={**CFG, "min_score": 0.5},
+                              rectifier_factory=lambda conn: FakeRectifier(), finder_factory=iter(finders).__next__)
+    return src, frames, images, finders
+
+
+PAIR = (np.zeros((240, 640), np.uint8), np.zeros((240, 640), np.uint8))
+
+
+def test_process_emits_a_frame_per_pair_even_without_a_hand():
+    src, frames, _, (left, right) = make_source()
+    left.view, right.view = views(scene())
+    src._process(PAIR, 0.0)
+    assert len(frames[0].hands) == 1 and frames[0].source == "leap_mp" and src.status["agreement"] == "agree"
+    left.view = right.view = None
+    src._process(PAIR, 0.5)
+    assert frames[1].hands == () and src.status["agreement"] == "none"
+
+
+def test_process_survives_a_detector_exception():
+    src, frames, _, (left, right) = make_source()
+    left.boom = True
+    src._process(PAIR, 0.0)  # must not raise
+    assert len(frames) == 1 and frames[0].hands == ()
+    left.boom = False
+    left.view, right.view = views(scene())
+    src._process(PAIR, 0.1)
+    assert len(frames[1].hands) == 1
+
+
+def test_offer_keeps_only_the_newest_pair():
+    src = make_source()[0]
+    older, newer = (PAIR[0].copy(), PAIR[1].copy()), (PAIR[0].copy(), PAIR[1].copy())
+    src._offer(older)
+    src._offer(newer)
+    assert src._slot is newer and src._dropped == 1
+
+
+def test_missing_dependencies_set_a_readable_error():
+    frames, calls = [], []
+
+    def no_mediapipe():
+        calls.append(1)
+        raise ImportError("No module named 'mediapipe'")
+    src = LeapMediaPipeSource(frames.append, lambda img: None, cfg=CFG, rectifier_factory=lambda conn: FakeRectifier(),
+                              finder_factory=no_mediapipe)
+    src._process(PAIR, 0.0)
+    src._process(PAIR, 0.1)
+    assert "webcam" in src.status["error"] and len(frames) == 2 and len(calls) == 1  # empty frames, and no retry of a missing library
+
+
+def test_preview_draws_dots_without_touching_the_inputs():
+    left, right = PAIR[0].copy(), PAIR[1].copy()
+    view = View(np.full((21, 2), (100.0, 50.0)), np.zeros((21, 3)), "right", 0.9)
+    img = preview(left, right, view, None)
+    stacked = np.frombuffer(img.pixels, np.uint8).reshape(480, 640)
+    assert (img.width, img.height) == (640, 480) and stacked[50, 100] == 255 and stacked[240 + 50, 100] == 0
+    assert not left.any() and not right.any()
