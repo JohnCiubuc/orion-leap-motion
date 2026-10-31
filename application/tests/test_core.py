@@ -1767,10 +1767,10 @@ def test_thumb_contact_needs_the_tips_to_be_close_in_the_image():
     assert thumb_contact(with_thumb_at(make_hand(), "pinky", offset=(0, 0, 45))) is None
 
 
-# Real MediaPipe session (left camera only, ~28 fps of a hand doing each pose for ~4 s), with finger extension and pinch
-# re-derived as the leap_mp source computes them. Checks the pose rules against MediaPipe's geometry, where depth is weak.
+# Real MediaPipe session (left camera only, ~28 fps of a hand doing each pose for ~4 s) as the leap_mp source produced it,
+# palm down and palm up. Checks the pose rules against MediaPipe's geometry, where depth is weak.
 MP_FIXTURE = Path(__file__).parent / "data" / "mediapipe_touch.orec"
-MP_POSES = ("touch_middle", "touch_ring", "touch_pinky", "pinch", "ok", "peace", "fist")
+MP_POSES = ("touch_middle", "touch_ring", "touch_pinky", "pinch", "ok", "peace", "fist", "open_palm")
 
 
 def mediapipe_begins():
@@ -1788,13 +1788,24 @@ def mediapipe_begins():
 @pytest.mark.parametrize("phase", ["touch_middle", "touch_ring", "touch_pinky", "peace", "fist"])
 def test_mediapipe_session_fires_the_pose_it_shows(phase):
     begins = mediapipe_begins()[phase]
-    assert begins[phase] == 1 and sum(begins.values()) == 1, begins  # exactly that pose, once, and nothing else
+    others = sum(v for k, v in begins.items() if k != "open_palm")  # an open hand at the start of a phase carries over from the last
+    assert begins[phase] == 1 and others == 1, begins  # exactly that pose, once, and nothing else
 
 
-@pytest.mark.parametrize("phase", ["still", "ok", "relaxed", "away"])
+@pytest.mark.parametrize("phase", ["still", "ok", "relaxed", "away", "up_open"])
 def test_mediapipe_session_other_poses_are_not_touches(phase):
     begins = mediapipe_begins()[phase]
     assert not any(begins[n] for n in ("touch_middle", "touch_ring", "touch_pinky", "peace", "fist")), begins
+
+
+@pytest.mark.parametrize("phase", ["up_touch_middle", "up_touch_ring", "up_touch_pinky"])
+def test_mediapipe_session_palm_up_touches_are_ignored(phase):
+    begins = mediapipe_begins()[phase]
+    assert not any(begins[n] for n in ("touch_middle", "touch_ring", "touch_pinky")), begins  # the palm hides the fingers
+
+
+def test_mediapipe_session_palm_up_open_hand_still_reads():
+    assert mediapipe_begins()["up_open"]["open_palm"] >= 1
 
 
 def test_thumbs_up_is_not_a_gesture():
@@ -1804,3 +1815,20 @@ def test_thumbs_up_is_not_a_gesture():
 def test_default_bindings_name_registered_gestures():
     for b in tomllib.loads((Path(__file__).parent.parent / "orion" / "default.toml").read_text())["bindings"]:
         assert b["gesture"].split(".")[0] in REGISTRY, b  # a binding to a removed gesture could never fire
+
+
+# ── Palm up: the palm hides the fingers from the camera, so touches are ignored ───────────────
+
+def test_palm_up_touches_are_ignored():
+    hand = with_thumb_at(make_hand(normal=(0, 1, 0)), "pinky")
+    assert thumb_contact(hand) == "pinky" and thumb_touch(hand) is None
+    assert run(REGISTRY["touch_pinky"](), hold(hand)) == []
+
+
+def test_palm_sideways_still_touches():
+    assert thumb_touch(with_thumb_at(make_hand(normal=(1, 0, 0)), "pinky")) == "pinky"
+
+
+def test_palm_up_open_hand_and_fist_still_read():
+    assert ("open_palm", "begin") in run(REGISTRY["open_palm"](), hold(make_hand(normal=(0, 1, 0))))
+    assert ("fist", "begin") in run(REGISTRY["fist"](), hold(make_hand(extended=set(), normal=(0, 1, 0))))

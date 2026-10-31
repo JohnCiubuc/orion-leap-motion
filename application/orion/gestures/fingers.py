@@ -33,6 +33,7 @@ class FingerMotion:
 
 TOUCH = 30.0  # mm across the camera's image plane (x, z): a fingertip this close to the thumb tip is touching. Depth (y) is ignored: a monocular source knows it worst, and touching tips coincide in the image
 MARGIN = 6.0  # mm: when two tips are that close, the one level with the thumb tip (along the fingers) must lead by this much
+PALM_UP = 0.3  # palm normal y above this: the palm faces away from the camera and hides the fingers, so touches are ignored
 SHAPE = {"grab": 0.7, "straight": 0.85}  # shortcut: tuned on one recording of loose curls, retune on other hand shapes
 
 
@@ -63,7 +64,7 @@ def thumb_contact(h):
 def thumb_touch(h):
     """`thumb_contact` for middle, ring or pinky, unless it is a fist or a peace sign (thumb holding ring + pinky down)."""
     name = thumb_contact(h)
-    if name in (None, "index") or h.grab >= SHAPE["grab"]:
+    if name in (None, "index") or h.grab >= SHAPE["grab"] or h.normal[1] > PALM_UP:
         return None
     return None if name == "ring" and straightness(h["pinky"]) < SHAPE["straight"] else name
 
