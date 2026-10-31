@@ -67,6 +67,17 @@ def test_backproject_recovers_a_flat_hand():
     assert np.abs(got - pts).max() < 3
 
 
+def test_triangulate_survives_a_bad_landmark():
+    pts = scene()
+    left, right = project_pair(pts)
+    right[3, 0] = left[3, 0] - 0.001  # one landmark the cameras barely disagree on in x: a depth of millions of mm
+    assert agreement(left, right, PIN, BASELINE, 4.0)
+    got = triangulate(left, right, PIN, BASELINE)
+    good = np.delete(np.arange(21), 3)
+    assert np.isfinite(got).all() and np.abs(got[good] - pts[good]).max() < 0.5
+    assert abs(got[3, 2] - np.median(pts[good, 2])) < 1  # the bad one sits at the hand's depth, along its own ray
+
+
 def test_to_leap_axes():
     got = to_leap_axes(np.array([[10.0, 5.0, 200.0]]), 40.0)
     assert got[0] == pytest.approx([-10, 200, 5 * LEAP_Z_SIGN])
@@ -201,6 +212,7 @@ def make_source(finders=None):
     finders = finders or [FakeFinder(), FakeFinder()]
     src = LeapMediaPipeSource(frames.append, images.append, cfg={**CFG, "min_score": 0.5},
                               rectifier_factory=lambda conn: FakeRectifier(), finder_factory=iter(finders).__next__)
+    assert src._setup()  # a ready source; the real one does this off the frame path
     return src, frames, images, finders
 
 
@@ -245,8 +257,41 @@ def test_missing_dependencies_set_a_readable_error():
     src = LeapMediaPipeSource(frames.append, lambda img: None, cfg=CFG, rectifier_factory=lambda conn: FakeRectifier(),
                               finder_factory=no_mediapipe)
     src._process(PAIR, 0.0)
+    src._setup_thread.join(2)
     src._process(PAIR, 0.1)
     assert "webcam" in src.status["error"] and len(frames) == 2 and len(calls) == 1  # empty frames, and no retry of a missing library
+
+
+def test_failed_setup_is_not_retried_every_frame():
+    frames, calls = [], []
+
+    def broken(conn):
+        calls.append(1)
+        raise RuntimeError("calibration not ready")
+    src = LeapMediaPipeSource(frames.append, lambda img: None, cfg=CFG, rectifier_factory=broken,
+                              finder_factory=lambda: FakeFinder())
+    src._process(PAIR, 0.0)
+    src._setup_thread.join(2)
+    for i in range(5):
+        src._process(PAIR, 0.1 * i)
+    assert len(calls) == 1 and len(frames) == 6 and "calibration" in src.status["error"]
+
+
+def test_slow_setup_does_not_stop_the_frames():
+    import threading
+    started, release = threading.Event(), threading.Event()
+
+    def slow(conn):
+        started.set()
+        release.wait(5)
+        return FakeRectifier()
+    frames = []
+    src = LeapMediaPipeSource(frames.append, lambda img: None, cfg=CFG, rectifier_factory=slow, finder_factory=lambda: FakeFinder())
+    src._process(PAIR, 0.0)  # returns while setup is still blocked: the watchdog needs frames
+    assert started.wait(2) and len(frames) == 1 and frames[0].hands == ()
+    release.set()
+    src._setup_thread.join(2)
+    assert src._fusion is not None
 
 
 def test_preview_draws_dots_without_touching_the_inputs():

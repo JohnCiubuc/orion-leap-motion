@@ -24,6 +24,7 @@ SWAP_CAMERAS = False  # shortcut: assumes stereo_left is the physical left camer
 LABEL_FLIP = False  # shortcut: assumes MediaPipe's hand label is right for this view, confirmed in the live bring-up
 DEPTH_MM = (60.0, 600.0)  # a hand over the device: nearer or further is a mismatch, not a hand
 MIN_AGREEING = 18  # of 21 landmarks need a positive disparity
+SETUP_RETRY_S = 3.0  # wait this long after a failed setup before trying again
 
 
 @dataclass(frozen=True)
@@ -71,9 +72,13 @@ class View:
 
 
 def triangulate(left_px: np.ndarray, right_px: np.ndarray, pinhole: Pinhole, baseline: float) -> np.ndarray:
-    """(21, 3) mm in the left camera's frame (x right, y down, z forward) from the same landmarks in both rectified images."""
-    d = np.maximum(left_px[:, 0] - right_px[:, 0], 1e-6)
-    z = pinhole.f * baseline / d
+    """(21, 3) mm in the left camera's frame (x right, y down, z forward) from the same landmarks in both rectified images.
+    A landmark the cameras barely disagree on (depth outside `DEPTH_MM`) takes the hand's median depth along its own ray."""
+    d = left_px[:, 0] - right_px[:, 0]
+    with np.errstate(divide="ignore"):
+        z = np.where(d > 0, pinhole.f * baseline / np.maximum(d, 1e-12), np.nan)
+    bad = ~((z >= DEPTH_MM[0]) & (z <= DEPTH_MM[1]))  # NaN compares false, so it counts as bad
+    z[bad] = np.median(z[~bad]) if (~bad).any() else DEPTH_MM[1]
     return np.column_stack(((left_px[:, 0] - pinhole.cx) * z / pinhole.f,
                             ((left_px[:, 1] + right_px[:, 1]) / 2 - pinhole.cy) * z / pinhole.f, z))
 
@@ -271,6 +276,7 @@ class LeapMediaPipeSource(LeapSource):
         self._slot, self._dropped, self._wake, self._lock = None, 0, threading.Event(), threading.Lock()
         self._rect = self._fusion = self._finders = self._worker = None
         self._broken, self._fps, self._last = False, 0.0, 0.0
+        self._setup_thread, self._retry_at, self._image_error = None, 0.0, False
 
     # ── LeapSource hooks ──────────────────────────────────────────────────────
 
@@ -279,7 +285,12 @@ class LeapMediaPipeSource(LeapSource):
             self.on_reference(from_leap(e))
 
     def _images(self, e):
-        self._offer(tuple(np.frombuffer(px, np.uint8).reshape(h, w) for w, h, px in raw_images(e)))
+        try:
+            self._offer(tuple(np.frombuffer(px, np.uint8).reshape(h, w) for w, h, px in raw_images(e)))
+        except Exception as err:  # runs on Leap's poll thread: an odd image must not break it
+            if not self._image_error:
+                self._image_error = True
+                log.warning("leap_mp: unusable image event: %s", err)
 
     def _on_open(self, conn):
         if self._worker is None:
@@ -309,29 +320,41 @@ class LeapMediaPipeSource(LeapSource):
                 pair, self._slot = self._slot, None
                 self._wake.clear()
             if pair is not None:
-                self._process(pair, time.monotonic())
+                try:
+                    self._process(pair, time.monotonic())
+                except Exception:  # the worker is never restarted, so nothing may end it
+                    log.exception("leap_mp: worker error")
+
+    def _ensure_setup(self):
+        """Start (or, after a back-off, retry) the setup on its own thread: the model load can take seconds, or a download
+        far longer, and frames have to keep flowing meanwhile or the watchdog would restart the controller."""
+        if self._broken or time.monotonic() < self._retry_at or (self._setup_thread and self._setup_thread.is_alive()):
+            return
+        self._setup_thread = threading.Thread(target=self._setup, name="leap-mp-setup", daemon=True)
+        self._setup_thread.start()
 
     def _setup(self) -> bool:
-        """Build the rectifier and finders on the first pair (the calibration is only readable once images flow)."""
+        """Build the rectifier, finders and fusion, each once (the calibration is only readable once images flow)."""
         if self._broken:
             return False
         try:
-            self._rect = self.rectifier_factory(getattr(self, "_conn", None))
-            self._finders = (self.finder_factory(), self.finder_factory())
+            self._rect = self._rect or self.rectifier_factory(getattr(self, "_conn", None))
+            self._finders = self._finders or (self.finder_factory(), self.finder_factory())
             self._fusion = Fusion(self.cfg, baseline=getattr(self._rect, "baseline", 40.0))
             self.status["error"] = ""
         except ImportError as e:
             self._broken = True
             self.status["error"] = f'The Leap (MediaPipe) source needs the "webcam" extra: pip install -e ".[webcam]" ({e})'
         except Exception as e:
-            self._rect = self._fusion = None
+            self._retry_at = time.monotonic() + SETUP_RETRY_S
             self.status["error"] = f"Could not set up the Leap (MediaPipe) source: {e}"
             log.warning("leap_mp: setup failed: %s", e)
         return self._fusion is not None
 
     def _process(self, pair, t: float):
         try:
-            if self._fusion is None and not self._setup():
+            if self._fusion is None:
+                self._ensure_setup()
                 return self._emit(t, ())
             left, right = (self._rect.rectify(c, img) for c, img in zip(("left", "right"), pair))
             views = (self._finders[0].find(left), self._finders[1].find(right))
