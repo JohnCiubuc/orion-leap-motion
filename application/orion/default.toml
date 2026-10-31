@@ -135,11 +135,6 @@ action = "hypr.dispatch"
 args = { cmd = "workspace e+1" }
 
 [[bindings]]
-gesture = "thumbs_up"
-action = "media"
-args = { op = "PlayPause" }
-
-[[bindings]]
 gesture = "thumbs_down"
 action = "audio.mute"
 

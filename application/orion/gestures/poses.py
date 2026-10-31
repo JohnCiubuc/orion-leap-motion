@@ -6,12 +6,6 @@ from .fingers import pinch_strength, thumb_touch
 FOUR = {"index", "middle", "ring", "pinky"}
 
 
-@pose("thumbs_up", hold=0.3, min_up=(0.6, 0.2, 1.0))
-def thumbs_up(h, p):
-    """Fist with the thumb pointing up."""
-    return h.extended == {"thumb"} and h["thumb"].direction[1] > p["min_up"]
-
-
 @pose("thumbs_down", hold=0.3, min_down=(0.6, 0.2, 1.0))
 def thumbs_down(h, p):
     """Fist with the thumb pointing down."""

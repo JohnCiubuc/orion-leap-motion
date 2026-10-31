@@ -1,6 +1,6 @@
 """Calibrate and measure the Leap (MediaPipe) source against Leap's own tracking, live, through a guided session.
 
-    ../.venv/bin/python scripts/leap_mp_compare.py [speed]     (speed 1 = ~2 min; 0.2 for a quick smoke run)
+    ../.venv/bin/python scripts/leap_mp_compare.py [speed] [new]   (speed 1 = ~6 min; 0.2 for a smoke run; `new` = only the newer phases)
 
 Follow the prompts, palm down over the device unless told otherwise. It records both trackers at once, prints a report
 (axis signs and scale from the three sweeps, which poses each tracker fired in each phase, hand side agreement, fingertip
@@ -37,14 +37,33 @@ PHASES = [
     ("pinch", "PINCH grip: thumb and index together, other fingers curled in, hold", 4, "pinch"),
     ("peace", "peace sign (index and middle up, thumb over ring and pinky), hold", 4, "peace"),
     ("fist", "fist, hold", 4, "fist"),
-    ("thumbs_up", "thumbs up, hold", 4, "thumbs_up"),
     ("relaxed", "a relaxed, half-curled hand, as when you are not gesturing, hold", 4, None),
     ("tap_middle", "TAP thumb to middle fingertip, release, 4 times, pausing about a second between", 7, None),
     ("ring_left", "thumb on RING fingertip, hand over the LEFT edge of the device, hold", 4, "touch_ring"),
     ("pinky_right", "thumb on PINKY fingertip, hand over the RIGHT edge of the device, hold", 4, "touch_pinky"),
     ("away", "take BOTH hands completely out of view of the device", 4, None),
+    # ── palm up ──
+    ("up_open", "palm UP, open hand, fingers spread, held still about 20 cm above the device", 4, "open_palm"),
+    ("up_touch_middle", "palm UP: thumb tip on your MIDDLE fingertip, hold", 4, "touch_middle"),
+    ("up_touch_ring", "palm UP: thumb tip on your RING fingertip, hold", 4, "touch_ring"),
+    ("up_touch_pinky", "palm UP: thumb tip on your PINKY fingertip, hold", 4, "touch_pinky"),
+    ("up_ok", "palm UP: OK sign (thumb and index together, other three straight), hold", 4, "ok"),
+    ("up_fist", "palm UP: fist, hold", 4, "fist"),
+    # ── thumbs in line with the camera ──
+    ("thumb_down", "fist, thumb pointing straight DOWN toward the device (a thumbs down), held over the device", 4, "thumbs_down"),
+    # ── index pointing out ──
+    ("point_out", "index finger pointing OUT away from you, other fingers curled, hand over the device", 4, None),
+    ("point_up", "index finger pointing UP at the ceiling, other fingers curled, hand over the device", 4, None),
+    # ── flat palm-down hand, one digit at a time pointing at the camera ──
+    ("flat_thumb_down", "palm DOWN, hand open and flat: bend ONLY the THUMB down toward the device (it crosses over the palm)", 4, None),
+    ("flat_index_down", "palm DOWN, hand flat: bend ONLY the INDEX finger straight down, its tip pointing at the device", 4, None),
+    ("flat_middle_down", "palm DOWN, hand flat: bend ONLY the MIDDLE finger straight down, its tip pointing at the device", 4, None),
+    ("flat_ring_down", "palm DOWN, hand flat: bend ONLY the RING finger straight down, its tip pointing at the device", 4, None),
+    ("flat_pinky_down", "palm DOWN, hand flat: bend ONLY the PINKY straight down, its tip pointing at the device", 4, None),
+    ("flat_roll", "palm DOWN, hand flat: bend thumb, index, middle, ring, pinky down one after another, then straighten them in the same order; twice", 12, None),
 ]
-POSES = ("open_palm", "touch_middle", "touch_ring", "touch_pinky", "ok", "pinch", "peace", "fist", "thumbs_up")
+NEW = ("up_", "thumb_", "point_", "flat_")  # phases added for the hybrid; `new` on the command line runs only these (plus the sweeps and "still")
+POSES = ("open_palm", "touch_middle", "touch_ring", "touch_pinky", "ok", "pinch", "peace", "fist", "thumbs_down")
 SWEEP_AXIS = {"sweep_x": 0, "sweep_y": 1, "sweep_z": 2}
 
 
@@ -85,7 +104,10 @@ def save(data, stamp):
     return paths
 
 
-def main(speed):
+def main(speed, only_new=False):
+    global PHASES
+    if only_new:
+        PHASES = [p for p in PHASES if p[0].startswith(NEW) or p[0] in ("sweep_x", "sweep_y", "sweep_z", "still")]
     load_builtins()
     cfg = Config()["leap_mp"]
     phase, data = [None], {p[0]: {"mp": [], "ref": [], "agree": []} for p in PHASES}
@@ -156,6 +178,11 @@ def main(speed):
         print(f"[{name}] MP {len(mp)} frames, hand {share(mp):.0f} %  Leap {len(ref)} frames, hand {share(ref):.0f} %"
               f"  cameras: {dict(Counter(d['agree']))}\n    fired MP: {got_mp or 'none'}   Leap: {got_ref or 'none'}{verdict}")
         pairs = pairs_of(d)
+        if pairs:
+            ext = lambda hands: " ".join(f"{100 * np.mean([f in h.extended for h in hands]):3.0f}" for f in FINGERS)  # noqa: E731
+            normal = lambda hands: np.median([h.normal for h in hands], axis=0).round(1)  # noqa: E731
+            print(f"    extended % (thumb index middle ring pinky)   MP {ext([m for m, _ in pairs])}  |  Leap {ext([r for _, r in pairs])}"
+                  f"   palm normal MP {normal([m for m, _ in pairs])} Leap {normal([r for _, r in pairs])}")
         if pairs and name not in SWEEP_AXIS:
             print("    fingertip |MP − Leap| mm (median):",
                   {FINGERS[k]: round(float(np.median([np.linalg.norm(m.fingers[k].tip - r.fingers[k].tip) for m, r in pairs])), 1)
@@ -164,4 +191,5 @@ def main(speed):
 
 
 if __name__ == "__main__":
-    main(float(sys.argv[1]) if len(sys.argv) > 1 else 1.0)
+    args = [a for a in sys.argv[1:] if a != "new"]
+    main(float(args[0]) if args else 1.0, only_new="new" in sys.argv[1:])

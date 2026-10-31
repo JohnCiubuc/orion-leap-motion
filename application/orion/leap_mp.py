@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 DEPTH_MM = (60.0, 600.0)  # a hand over the device: nearer or further is a mismatch, not a hand
 MIN_AGREEING = 18  # of 21 landmarks need a positive disparity
 EXTEND = (0.90, 0.85)  # (on, off) finger straightness; shortcut: MediaPipe under-curls fingers (curled ones read 0.75-0.78, the Leap's 0.63), tuned on one hand
-PINCH_MAX_GRAB = 0.35  # shortcut: an OK sign reads 0.13-0.15, a thumbs up 0.5-0.86; tuned on one hand
+PINCH_MAX_GRAB = 0.35  # shortcut: an OK sign reads 0.13-0.15, a closed hand 0.5-1.0; tuned on one hand
 LABEL_FRAMES = 15  # consecutive frames of the other label before the hand's side changes (MediaPipe guesses it per frame)
 SETUP_RETRY_S = 3.0  # wait this long after a failed setup before trying again
 
@@ -212,7 +212,7 @@ def mediapipe_backend(delegate: str = "gpu"):
 
 def planar_pinch(w: np.ndarray, grab: float = 0.0) -> float:
     """Thumb-index pinch, 0..1, from the tips' distance across the image plane (Leap x, z): depth is MediaPipe's weakest axis.
-    Zero for a closed hand: in a fist or a thumbs up the thumb merely rests on the index."""
+    Zero for a closed hand: in a fist the thumb merely rests on the index."""
     if grab >= PINCH_MAX_GRAB:
         return 0.0
     d = float(np.hypot(w[4, 0] - w[8, 0], w[4, 2] - w[8, 2]))

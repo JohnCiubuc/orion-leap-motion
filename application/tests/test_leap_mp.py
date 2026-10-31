@@ -435,11 +435,11 @@ def test_planar_pinch_ignores_depth():
     assert planar_pinch(w) == 0.0
 
 
-def test_planar_pinch_is_not_a_fist_or_a_thumbs_up():
+def test_planar_pinch_is_not_a_closed_hand():
     w = np.zeros((21, 3))
     w[4], w[8] = (10, 0, 5), (10, 0, 6)  # tips together in the image
     assert planar_pinch(w, grab=0.14) == 1.0  # an OK sign: the other fingers are open
-    assert planar_pinch(w, grab=0.7) == 0.0  # a thumbs up or a fist: the thumb just rests against the curled index
+    assert planar_pinch(w, grab=0.7) == 0.0  # a fist: the thumb just rests against the curled index
 
 
 def test_fusion_pinch_follows_the_image_not_the_depth(monkeypatch):

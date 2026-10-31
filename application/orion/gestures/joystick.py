@@ -69,5 +69,5 @@ class GrabJoystick(Joystick):
     params = {**Joystick.params, "strength": (0.85, 0.3, 1.0)}
 
     def held(self, h, was_held):
-        # a real fist: thumb tucked too, so thumbs up/down don't count
+        # a real fist: thumb tucked too, so a lone thumb sticking out doesn't count
         return h.grab > self.p["strength"] - (0.15 if was_held else 0) and not h.extended

@@ -102,7 +102,7 @@ pip install -e "application[webcam]"        # adds mediapipe + OpenCV
 
 The first start downloads Google's `hand_landmarker.task` (about 7 MB) to `~/.cache/orion-renewal/`. Restart after
 changing the source. Hold your hand upright toward the camera (fingers up, palm facing it): `tilt = 90` lays it
-flat for the gestures, as if it were over a Leap. Limits: thumbs up/down read as thumb-forward/back, because the tilt
+flat for the gestures, as if it were over a Leap. Limits: thumbs down reads as thumb-forward/back, because the tilt
 turns "up" into "away". OrionDo opens with an open palm on the webcam (`[webcam] trigger`); distance is estimated from how big the hand looks, so zoom and swipe lengths are
 approximate; the fingertip is noisier than the Leap's, so OrionDo may want a larger `deadzone`/`tap_trigger`.
 

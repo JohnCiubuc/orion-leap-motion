@@ -333,7 +333,6 @@ def test_normal_and_direction(side):
 
 
 WEBCAM_POSES = {
-    "thumbs_up": lambda: facing(extended={"thumb"}, thumb=(0, 1, 0)),
     "thumbs_down": lambda: facing(extended={"thumb"}, thumb=(0, -1, 0)),
     "ok": lambda: pinched(facing(extended={"middle", "ring", "pinky"})),
     "fist": lambda: facing(extended=set()),

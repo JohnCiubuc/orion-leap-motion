@@ -45,7 +45,6 @@ def with_thumb_at(hand, finger, offset=(0, 0, 3)):
 # ── Poses ─────────────────────────────────────────────────────────────────────
 
 POSES = {
-    "thumbs_up": make_hand(extended={"thumb"}, normal=(-1, 0, 0), thumb=(0, 1, 0)),
     "thumbs_down": make_hand(extended={"thumb"}, normal=(-1, 0, 0), thumb=(0, -1, 0)),
     "ok": with_thumb_at(make_hand(extended={"middle", "ring", "pinky"}, pinch=0.95), "index"),
     "fist": make_hand(extended=set()),
@@ -60,15 +59,15 @@ def test_pose_detected(name):
 
 
 def test_pose_not_confused():
-    assert run(REGISTRY["thumbs_up"](), hold(POSES["thumbs_down"])) == []
+    assert run(REGISTRY["thumbs_down"](), hold(POSES["fist"])) == []
     assert run(REGISTRY["fist"](), hold(POSES["open_palm"])) == []
 
 
 def test_pose_hold_and_end():
-    g = REGISTRY["thumbs_up"]({"hold": 0.5})
-    assert run(g, hold(POSES["thumbs_up"], 0.3)) == []  # not held long enough
-    frames = hold(POSES["thumbs_up"], 1.0) + [Frame(t=1.5 + i / 100, hands=()) for i in range(30)]
-    assert run(REGISTRY["thumbs_up"](), frames) == [("thumbs_up", "begin"), ("thumbs_up", "end")]
+    g = REGISTRY["thumbs_down"]({"hold": 0.5})
+    assert run(g, hold(POSES["thumbs_down"], 0.3)) == []  # not held long enough
+    frames = hold(POSES["thumbs_down"], 1.0) + [Frame(t=1.5 + i / 100, hands=()) for i in range(30)]
+    assert run(REGISTRY["thumbs_down"](), frames) == [("thumbs_down", "begin"), ("thumbs_down", "end")]
 
 
 # ── Motions ───────────────────────────────────────────────────────────────────
@@ -300,7 +299,7 @@ def test_joystick_ratchets_by_distance_not_time():
     assert phases[0] == "begin" and phases[-1] == "end"
 
 
-def test_grab_joystick_ignores_thumbs_up():
+def test_grab_joystick_ignores_a_lone_thumb():
     thumbs = make_hand(extended={"thumb"}, normal=(-1, 0, 0), thumb=(0, 1, 0), grab=0.95)
     assert run(REGISTRY["grab_joy"](), hold(thumbs)) == []
 
@@ -1796,3 +1795,12 @@ def test_mediapipe_session_fires_the_pose_it_shows(phase):
 def test_mediapipe_session_other_poses_are_not_touches(phase):
     begins = mediapipe_begins()[phase]
     assert not any(begins[n] for n in ("touch_middle", "touch_ring", "touch_pinky", "peace", "fist")), begins
+
+
+def test_thumbs_up_is_not_a_gesture():
+    assert "thumbs_up" not in REGISTRY and "thumbs_down" in REGISTRY
+
+
+def test_default_bindings_name_registered_gestures():
+    for b in tomllib.loads((Path(__file__).parent.parent / "orion" / "default.toml").read_text())["bindings"]:
+        assert b["gesture"].split(".")[0] in REGISTRY, b  # a binding to a removed gesture could never fire
