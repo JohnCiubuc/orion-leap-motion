@@ -1,7 +1,7 @@
 """Static hand poses. Each is a predicate over a single Hand."""
 
 from . import pose
-from .fingers import pinch_strength, thumb_touch
+from .fingers import CLEAR, pinch_strength, thumb_gap, thumb_touch
 
 FOUR = {"index", "middle", "ring", "pinky"}
 
@@ -58,3 +58,27 @@ def _touch(finger):
 
 for _f in ("middle", "ring", "pinky"):
     pose(f"touch_{_f}", hold=0.25, still=(60, 10, 300))(_touch(_f))
+
+
+def _down(digit):
+    """A flat palm-down hand with one digit bent toward the device (index is the tap's). Judged by MediaPipe's flags; the pinky,
+    which MediaPipe cannot see bend, by the Leap's, so it only works where the hand carries them (the hybrid source)."""
+    others = frozenset({"thumb", "index", "middle", "ring", "pinky"}) - {digit}
+
+    def check(h, p):
+        if h.normal[1] > -0.5 or float((h.velocity ** 2).sum()) ** 0.5 >= p["still"]:
+            return False
+        if digit == "pinky":
+            leap = h.leap_extended
+            if leap is None or "pinky" in leap or not {"index", "middle", "ring"} <= leap or not others <= h.extended:
+                return False
+        elif h.extended != others:
+            return False
+        # not a thumb-to-fingertip touch, which also folds the thumb and curls the touched finger
+        return all(thumb_gap(h, f) >= CLEAR for f in ("index", "middle", "ring", "pinky")) if digit == "thumb" else thumb_gap(h, digit) >= CLEAR
+    check.__doc__ = f"Hand flat and palm down, only the {digit} bent down toward the device, held still."
+    return check
+
+
+for _d in ("thumb", "middle", "ring", "pinky"):
+    pose(f"down_{_d}", hold=0.3, still=(60, 10, 300))(_down(_d))

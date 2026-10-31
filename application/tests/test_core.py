@@ -105,6 +105,23 @@ def test_tap():
     assert run(REGISTRY["tap"](), frames) == [("tap", "fire")]
 
 
+def dip_frames(mm):
+    frames = []
+    for i in range(30):
+        h = make_hand(extended={"index"})
+        h.fingers[1].joints[-1][1] -= mm * math.sin(min(i, 10) / 10 * math.pi)
+        frames.append(Frame(t=i / 100, hands=(h,)))
+    return frames
+
+
+def test_tap_fires_on_a_modest_finger_bend():
+    assert run(REGISTRY["tap"](), dip_frames(10)) == [("tap", "fire")]  # the old 12 mm default needed a bigger bend than this
+
+
+def test_small_finger_wobble_is_not_a_tap():
+    assert run(REGISTRY["tap"](), dip_frames(6)) == []
+
+
 # ── Paths ($P) ────────────────────────────────────────────────────────────────
 
 def poly(*c):
@@ -663,6 +680,22 @@ def test_new_keys_land_inside_their_table_not_after_comments():
     import tomllib
     data = tomllib.loads(text)["modes"]["air_mouse"]
     assert data["follow_app"] == "(?i)^krita$" and all("follow_app" not in h for h in data.get("on_enter", []))
+
+
+# ── Field gate ────────────────────────────────────────────────────────────────
+
+def test_field_gate_ignores_hands_near_the_edge_with_hysteresis():
+    from types import SimpleNamespace as NS
+    from orion.field import FieldGate
+    gate = FieldGate(NS(general={"field_angle": 50}))
+    seen = lambda x: len(gate(Frame(t=0, hands=(make_hand("left", palm=(x, 200, 0)),))).hands)  # noqa: E731
+    assert seen(0) == 1
+    assert seen(300) == 0  # outside
+    assert seen(150) == 1  # worst point 47.5 deg
+    assert seen(200) == 1  # 53 deg: an admitted hand keeps the margin
+    assert seen(300) == 0
+    assert seen(200) == 0  # but a hand coming in there is not admitted
+    assert len(FieldGate(NS(general={"field_angle": 0}))(Frame(t=0, hands=(make_hand("left", palm=(900, 200, 0)),))).hands) == 1
 
 
 # ── Handedness ────────────────────────────────────────────────────────────────
@@ -1836,7 +1869,7 @@ def test_palm_up_open_hand_and_fist_still_read():
 
 # ── Frame.leap: the hybrid source's untouched Leap frame, which OrionDo reads ────────────────
 
-def test_oriondo_gets_the_leap_frame_with_filtered_sides(tmp_path):
+def test_oriondo_and_tap_get_the_leap_frame_with_filtered_sides(tmp_path):
     import dataclasses
     from orion.engine import Engine
 
@@ -1850,7 +1883,7 @@ def test_oriondo_gets_the_leap_frame_with_filtered_sides(tmp_path):
     path = tmp_path / "config.toml"
     path.write_text("")
     engine = Engine(Config(path), dry_run=True)
-    engine.gestures = [Spy("oriondo"), Spy("swipe")]
+    engine.gestures = [Spy("oriondo"), Spy("swipe"), Spy("tap")]
     leap_hand = make_hand("right")  # the tracker's first guess; the handedness filter settles on the preferred "left"
     merged = dataclasses.replace(leap_hand, pinch=0.9)
     assert Frame(t=0).leap is None
@@ -1858,3 +1891,94 @@ def test_oriondo_gets_the_leap_frame_with_filtered_sides(tmp_path):
     oriondo, other = engine.gestures[0].seen, engine.gestures[1].seen
     assert oriondo.hands[0].pinch == leap_hand.pinch and other.hands[0].pinch == 0.9
     assert oriondo.hands[0].side == other.hands[0].side == "left"
+    assert engine.gestures[2].seen.hands[0].pinch == leap_hand.pinch  # a tap is judged on the Leap's fingertip: MediaPipe's depth is the weakest axis
+
+
+def test_leap_extended_survives_a_recording():
+    import dataclasses
+    hybrid = dataclasses.replace(make_hand(), leap_extended=frozenset({"index", "pinky"}))  # the Leap's own flags on a merged hand
+    frame = from_dict(to_dict(Frame(t=1.0, hands=(hybrid, make_hand("left")))))
+    assert frame.hands[0].leap_extended == frozenset({"index", "pinky"}) and frame.hands[1].leap_extended is None
+
+
+# ── down_thumb / down_middle / down_ring / down_pinky: a flat palm-down hand with one digit bent toward the device ──
+
+FIVE = frozenset(FINGERS)
+
+
+def flat_hand_with(digit, **kw):
+    hand = make_hand(extended=FIVE - {digit}, **kw)
+    if digit == "thumb":  # a real thumb crosses the palm (17 mm ahead of its centre, 45 mm from the nearest fingertip), not out to the pinky
+        hand["thumb"].joints[-1] = hand.palm + np.array((0, 0, -17), np.float32)
+    return hand
+
+
+@pytest.mark.parametrize("digit", ["thumb", "middle", "ring"])
+def test_down_pose_fires_for_its_own_digit_only(digit):
+    hand = flat_hand_with(digit)
+    for other in ("thumb", "middle", "ring"):
+        want = [(f"down_{other}", "begin")] if other == digit else []
+        assert run(REGISTRY[f"down_{other}"](), hold(hand)) == want, (digit, other)
+
+
+@pytest.mark.parametrize("digit", ["thumb", "middle", "ring"])
+def test_down_pose_needs_a_still_palm_down_hand(digit):
+    pose = f"down_{digit}"
+    assert run(REGISTRY[pose](), hold(flat_hand_with(digit, normal=(1, 0, 0)))) == []  # palm sideways
+    assert run(REGISTRY[pose](), hold(flat_hand_with(digit, normal=(0, 1, 0)))) == []  # palm up
+    assert run(REGISTRY[pose](), hold(flat_hand_with(digit, velocity=(0, 150, 0)))) == []  # moving
+
+
+def test_down_pose_ignores_a_thumb_touching_a_fingertip():
+    # a touch also folds the thumb and curls the touched finger, so both look "bent": the thumb tip must be clear of the fingertips
+    assert run(REGISTRY["down_thumb"](), hold(with_thumb_at(flat_hand_with("thumb"), "middle"))) == []
+    assert run(REGISTRY["down_ring"](), hold(with_thumb_at(flat_hand_with("ring"), "ring"))) == []
+    assert run(REGISTRY["down_middle"](), hold(with_thumb_at(flat_hand_with("middle"), "middle"))) == []
+
+
+def test_down_pinky_is_judged_by_the_leap():
+    import dataclasses
+    # MediaPipe cannot see the pinky bend, so on a hybrid hand its flags say "open" and the Leap's say "pinky bent"
+    bent = dataclasses.replace(make_hand(), leap_extended=FIVE - {"pinky"})
+    assert run(REGISTRY["down_pinky"](), hold(bent)) == [("down_pinky", "begin")]
+    assert run(REGISTRY["down_pinky"](), hold(flat_hand_with("pinky"))) == []  # no Leap flags: a relaxed hand reads the same
+    relaxed = dataclasses.replace(make_hand(), leap_extended=frozenset({"thumb", "index"}))  # the Leap sees middle and ring bent too
+    assert run(REGISTRY["down_pinky"](), hold(relaxed)) == []
+    touching = dataclasses.replace(with_thumb_at(make_hand(), "pinky"), leap_extended=FIVE - {"pinky"})
+    assert run(REGISTRY["down_pinky"](), hold(touching)) == []
+
+
+# Real recordings of the four down poses: three of the user's own (merged hybrid hands), and the hybrid calibration session with
+# the Leap's flags attached (the pinky), plus phases that look similar and must stay silent (a relaxed hand, touches, peace, fist).
+DOWN_FIXTURE = Path(__file__).parent / "data" / "down_digits.orec"
+DOWN_POSES = ("down_thumb", "down_middle", "down_ring", "down_pinky")
+
+
+def down_begins():
+    by_phase = {}
+    for line in gzip.open(DOWN_FIXTURE, "rt"):
+        d = json.loads(line)
+        by_phase.setdefault(d["phase"], []).append(from_dict(d))
+    out = {}
+    for phase, frames in by_phase.items():
+        gestures = {n: REGISTRY[n]() for n in DOWN_POSES}  # one instance per phase: a pose has to be held across frames
+        out[phase] = {n: sum(e.phase == "begin" for f in frames for e in g.update(f)) for n, g in gestures.items()}
+    return out
+
+
+@pytest.mark.parametrize("phase,digit", [("down_thumb", "thumb"), ("down_middle", "middle"), ("down_ring", "ring")])
+def test_the_users_down_recordings_fire_their_digit_once(phase, digit):
+    begins = down_begins()[phase]
+    assert begins[f"down_{digit}"] == 1 and sum(begins.values()) == 1, begins
+
+
+@pytest.mark.parametrize("phase,digit", [("hy_flat_thumb_down", "thumb"), ("hy_flat_middle_down", "middle"),
+                                         ("hy_flat_ring_down", "ring"), ("hy_flat_pinky_down", "pinky")])
+def test_calibration_down_phases_fire_their_digit_only(phase, digit):
+    begins = down_begins()[phase]
+    assert begins[f"down_{digit}"] >= 1 and sum(begins.values()) == begins[f"down_{digit}"], begins
+
+
+@pytest.mark.parametrize("phase", ["hy_still", "hy_relaxed", "hy_touch_pinky", "hy_touch_ring", "hy_peace", "hy_fist"])
+def test_down_poses_stay_silent_on_look_alikes(phase):
+    assert not any(down_begins()[phase].values()), down_begins()[phase]

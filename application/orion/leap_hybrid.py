@@ -61,7 +61,7 @@ class Merger:
         thumb = self._thumb_out(thumb_lateral(mp))
         fingers = tuple(Finger(f.name, thumb if f.name == "thumb" else f.extended,
                                (leap.palm + (f.joints - mp.palm) @ R.T).astype(np.float32)) for f in mp.fingers)
-        return dataclasses.replace(leap, fingers=fingers, pinch=mp.pinch, grab=max(mp.grab, leap.grab))  # a fist: the Leap reads 1.0, MediaPipe ~0.7
+        return dataclasses.replace(leap, fingers=fingers, pinch=mp.pinch, grab=max(mp.grab, leap.grab), leap_extended=leap.extended)  # a fist: the Leap reads 1.0, MediaPipe ~0.7
 
     def _thumb_out(self, lateral: float) -> bool:
         low, high = (self.cfg["thumb_out"] + h for h in THUMB_HYSTERESIS)

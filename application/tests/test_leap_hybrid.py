@@ -193,3 +193,10 @@ def test_extension_cutoffs_separate_a_shallow_bend_from_an_open_finger():
     from orion.webcam import _extended
     assert not _extended(0.87, True, *EXTEND)  # a bent index in the flat-hand session (0.84-0.87)
     assert _extended(0.912, False, *EXTEND) and _extended(0.912, True, *EXTEND)  # the lowest open index seen
+
+
+def test_merged_hand_carries_the_leaps_own_finger_flags():
+    leap = make_hand(extended={"index", "middle"})
+    merged = Merger(CFG)(leap, skewed(make_hand()), 0.0)
+    assert merged.leap_extended == leap.extended and "ring" in merged.extended  # MediaPipe's flags, plus what the Leap said
+    assert Merger(CFG)(leap, None, 0.0).leap_extended is None  # a plain Leap hand's own flags are the Leap's

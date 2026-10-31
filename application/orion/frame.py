@@ -47,6 +47,7 @@ class Hand:
     normal: np.ndarray  # (3,) unit, out of the palm
     direction: np.ndarray  # (3,) unit, palm → fingers
     fingers: tuple[Finger, ...]
+    leap_extended: frozenset[str] | None = None  # the hybrid source's merged hand: the Leap's own extension flags (`extended` is MediaPipe's)
 
     def __getitem__(self, name: str) -> Finger:
         return self.fingers[FINGERS.index(name)]
@@ -106,6 +107,7 @@ def to_dict(f: Frame) -> dict:
         "velocity": h.velocity.tolist(), "normal": h.normal.tolist(),
         "direction": h.direction.tolist(),
         "fingers": [[fi.extended, fi.joints.tolist()] for fi in h.fingers],
+        **({"leap_extended": sorted(h.leap_extended)} if h.leap_extended is not None else {}),
     } for h in f.hands]}
 
 
@@ -116,6 +118,7 @@ def from_dict(d: dict, source: str = "replay") -> Frame:
         grab=h["grab"], palm=a(h["palm"]), stable=a(h["stable"]),
         velocity=a(h["velocity"]), normal=a(h["normal"]), direction=a(h["direction"]),
         fingers=tuple(Finger(n, e, a(j)) for n, (e, j) in zip(FINGERS, h["fingers"])),
+        leap_extended=frozenset(h["leap_extended"]) if "leap_extended" in h else None,
     ) for h in d["hands"])
     return Frame(t=d["t"], fps=d["fps"], hands=hands, source=source)
 

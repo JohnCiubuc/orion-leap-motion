@@ -41,7 +41,7 @@ def palm_flip(tr, p):
     return None
 
 
-@motion("tap", window=0.15, cooldown=0.35, depth=(12, 4, 40), still=(8, 2, 30))
+@motion("tap", window=0.15, cooldown=0.35, depth=(9, 4, 40), still=(8, 2, 30))
 def tap(tr, p):
     """Quick downward index-finger tap while the palm stays still."""
     if "index" not in tr.hands[0].extended:

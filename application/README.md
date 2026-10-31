@@ -147,7 +147,7 @@ for the controller, a common cause of the sleep in the first place.
 
 | Family | Built in | Emits |
 |---|---|---|
-| Pose | `thumbs_down` `ok` `fist` `open_palm` `peace` `pinch` `touch_middle` `touch_ring` `touch_pinky` `engage` | `begin` once held, `end` on release |
+| Pose | `thumbs_down` `down_thumb` `down_middle` `down_ring` `down_pinky` `ok` `fist` `open_palm` `peace` `pinch` `touch_middle` `touch_ring` `touch_pinky` `engage` | `begin` once held, `end` on release |
 | Motion | `swipe.{left,right,up,down}` `palm_flip.{up,down}` `tap` | `fire` |
 | Path | `path.{circle,square,triangle,z}` and any shape you record in the UI | `fire` (value = match score) |
 | Pinch & hold | `pinch_joy.{up,down,left,right}` `grab_joy.{…}` (relative ratchet: one event per `step` mm moved, then the current position becomes the new reference point) | `begin`, one `fire` per step (value = new reference point), `end` |
