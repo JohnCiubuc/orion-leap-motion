@@ -116,7 +116,7 @@ class LeapSource(Source):
         from leap.enums import PolicyFlag
         from leapc_cffi import libleapc
         self._conn.set_policy_flags(flags_to_set=[PolicyFlag.AllowPauseResume])
-        libleapc.LeapSetPause(self._conn.get_connection_ptr()[0], False)
+        libleapc.LeapSetPause(self._conn.get_connection_ptr(), False)
 
     def restart(self, service=False) -> str:
         """Unpause → USB reset (like replugging) → reconnect. `service` restarts the daemon first."""
