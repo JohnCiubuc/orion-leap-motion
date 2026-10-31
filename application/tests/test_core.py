@@ -1,9 +1,12 @@
 """Gesture recognition, routing and config round-trips — all on synthetic hands, no device needed."""
 
+import gzip
+import json
 import math
 import os
 import tempfile
 import tomllib
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -14,7 +17,7 @@ from orion.actions import ACTIONS, Action, load_builtins as load_actions  # noqa
 from orion.config import Config  # noqa: E402
 from orion.frame import Frame, from_dict, pack_skeleton, to_dict  # noqa: E402
 from orion.gestures import REGISTRY, GestureEvent, load_builtins  # noqa: E402
-from orion.gestures.fingers import FingerMotion  # noqa: E402
+from orion.gestures.fingers import FingerMotion, pinch_strength, thumb_contact, thumb_touch  # noqa: E402
 from orion.gestures.paths import PathGesture, _resample  # noqa: E402
 from orion.gestures.precision import PrecisionLock  # noqa: E402
 from orion.router import Router  # noqa: E402
@@ -1634,3 +1637,73 @@ def test_oriondo_a_flick_right_after_entering_does_not_tap_close():
     _, t = feed(g, t + 0.08, index_hand(*o), 30)
     evs = [e for i in range(8) for e in feed(g, t + i / 100, index_hand(o[0], o[1], dip=i * 1.5))[0]]
     assert key_events(evs) == [("end", "tap")]  # a real one, later, still closes
+
+
+# ── Thumb touching middle / ring / pinky ──────────────────────────────────────
+
+TOUCHES = ("touch_middle", "touch_ring", "touch_pinky")
+
+
+def with_thumb_at(hand, finger, offset=(0, 0, 3)):
+    """`hand` with its thumb tip moved onto `finger`'s tip."""
+    hand["thumb"].joints[-1] = hand[finger].tip + np.asarray(offset, np.float32)
+    return hand
+
+
+def test_thumb_touch_poses_registered():
+    assert all(n in REGISTRY for n in TOUCHES)
+
+
+def test_pinky_touch_synthetic():
+    hand = with_thumb_at(make_hand(pinch=0.95), "pinky")
+    assert thumb_contact(hand) == thumb_touch(hand) == "pinky"
+    assert pinch_strength(hand) == 0.0  # Leap's pinch also reads high here; thumb-index gestures must not see it
+    assert run(REGISTRY["touch_pinky"](), hold(hand)) == [("touch_pinky", "begin")]
+    assert run(REGISTRY["touch_ring"](), hold(hand)) == run(REGISTRY["touch_middle"](), hold(hand)) == []
+
+
+def test_no_contact_leaves_pinch_alone():
+    hand = make_hand(pinch=0.95)
+    assert thumb_contact(hand) is None and pinch_strength(hand) == 0.95
+    assert all(run(REGISTRY[n](), hold(hand)) == [] for n in TOUCHES)
+
+
+def test_fist_and_peace_are_not_touches():
+    fist = with_thumb_at(make_hand(extended=set(), grab=1.0), "middle")
+    assert thumb_touch(fist) is None
+    peace = with_thumb_at(make_hand(extended={"index", "middle"}), "ring")  # thumb holds ring + pinky down
+    assert thumb_touch(peace) is None
+    assert pinch_strength(with_thumb_at(make_hand(extended={"index", "middle"}, pinch=0.95), "ring")) == 0.0
+
+
+def test_moving_hand_is_not_a_touch():
+    moving = with_thumb_at(make_hand(velocity=(0, 150, 0)), "pinky")
+    assert run(REGISTRY["touch_pinky"](), hold(moving)) == []
+
+
+FIXTURE = Path(__file__).parent / "data" / "thumb_touch.orec"  # real hand: thumb to middle, ring, pinky, index; peace; fist; relaxed
+# when each shape is held, in seconds into the recording
+SEGMENTS = {"touch_middle": (2.4, 3.8), "touch_ring": (4.9, 6.7), "touch_pinky": (7.9, 9.8), "ok": (10.4, 13.0),
+            "peace": (16.4, 18.7), "fist": (19.3, 21.5)}
+
+
+def recorded_begins():
+    frames = [from_dict(json.loads(line)) for line in gzip.open(FIXTURE, "rt")]
+    gestures = {n: REGISTRY[n]() for n in (*TOUCHES, "pinch", "ok", "peace", "fist", "open_palm")}
+    return {n: [round(e.t, 2) for f in frames for e in g.update(f) if e.phase == "begin"] for n, g in gestures.items()}
+
+
+def test_recorded_touches_fire_once_each_in_their_segment():
+    begins = recorded_begins()
+    for name in TOUCHES:
+        (a, b), got = SEGMENTS[name], begins[name]
+        assert len(got) == 1 and a <= got[0] <= b, (name, got)
+
+
+def test_recorded_touches_do_not_trigger_other_gestures():
+    begins = recorded_begins()
+    inside = lambda t, *names: any(SEGMENTS[n][0] <= t <= SEGMENTS[n][1] for n in names)  # noqa: E731
+    assert all(inside(t, "ok", "fist") for t in begins["pinch"]), begins["pinch"]  # not on touches, not on peace
+    assert all(inside(t, "ok") for t in begins["ok"]), begins["ok"]
+    assert any(inside(t, "peace") for t in begins["peace"])  # (a stray peace at the very end, on the relaxed hand, predates this)
+    assert all(inside(t, "fist") for t in begins["fist"]) and begins["fist"], begins["fist"]

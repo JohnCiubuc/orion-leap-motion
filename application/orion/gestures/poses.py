@@ -1,6 +1,7 @@
 """Static hand poses. Each is a predicate over a single Hand."""
 
 from . import pose
+from .fingers import pinch_strength, thumb_touch
 
 FOUR = {"index", "middle", "ring", "pinky"}
 
@@ -20,7 +21,7 @@ def thumbs_down(h, p):
 @pose("ok", hold=0.8, pinch=(0.75, 0.3, 1.0), still=(60, 10, 300))
 def ok(h, p):
     """Thumb and index touching, other three fingers extended, hand held still (so pinch-scrolling isn't OK)."""
-    return (h.pinch > p["pinch"] and {"middle", "ring", "pinky"} <= h.extended
+    return (pinch_strength(h) > p["pinch"] and {"middle", "ring", "pinky"} <= h.extended
             and float((h.velocity ** 2).sum()) ** 0.5 < p["still"])
 
 
@@ -45,10 +46,21 @@ def peace(h, p):
 @pose("pinch", hold=0.0, strength=(0.85, 0.3, 1.0))
 def pinch(h, p):
     """Thumb–index pinch (instant). Pairs with input.button for click-and-drag."""
-    return h.pinch > p["strength"]
+    return pinch_strength(h) > p["strength"]
 
 
 @pose("engage", hold=0.5, facing=(0.6, 0.2, 1.0))
 def engage(h, p):
     """Open palm facing the screen ("stop" sign). Arms the next gesture when engage is required."""
     return len(h.extended) >= 4 and h.normal[2] < -p["facing"]
+
+
+def _touch(finger):
+    def check(h, p):
+        return thumb_touch(h) == finger and float((h.velocity ** 2).sum()) ** 0.5 < p["still"]
+    check.__doc__ = f"Thumb tip touching the {finger} fingertip, hand held still. Not a fist or a peace sign."
+    return check
+
+
+for _f in ("middle", "ring", "pinky"):
+    pose(f"touch_{_f}", hold=0.25, still=(60, 10, 300))(_touch(_f))

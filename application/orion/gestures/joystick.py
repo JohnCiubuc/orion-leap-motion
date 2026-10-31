@@ -13,6 +13,7 @@ from __future__ import annotations
 import numpy as np
 
 from . import SIDES, Gesture, GestureEvent, register
+from .fingers import pinch_strength
 
 
 class Joystick(Gesture):
@@ -58,7 +59,7 @@ class PinchJoystick(Joystick):
     params = {**Joystick.params, "strength": (0.85, 0.3, 1.0)}
 
     def held(self, h, was_held):
-        return h.pinch > self.p["strength"] - (0.15 if was_held else 0)  # hysteresis: no flicker
+        return pinch_strength(h) > self.p["strength"] - (0.15 if was_held else 0)  # hysteresis: no flicker
 
 
 @register
