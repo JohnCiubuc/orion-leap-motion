@@ -286,6 +286,12 @@ class LeapMediaPipeSource(LeapSource):
             self._worker = threading.Thread(target=self._work, name="leap-mp", daemon=True)
             self._worker.start()
 
+    def stop(self):
+        super().stop()
+        self._wake.set()
+        if self._worker is not None:
+            self._worker.join(timeout=2)  # let a detection in flight finish rather than die with the process
+
     # ── Worker ────────────────────────────────────────────────────────────────
 
     def _offer(self, pair):

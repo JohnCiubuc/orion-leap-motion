@@ -280,3 +280,12 @@ def test_engine_starts_the_leap_mp_source(tmp_path, monkeypatch):
     engine = Engine(Config(path), dry_run=True)
     engine.start()
     assert isinstance(engine.source, LeapMediaPipeSource) and engine.source.cfg["agree_px"] == 4.0
+
+
+def test_stop_waits_for_the_worker():
+    src = make_source()[0]
+    src._on_open(None)
+    worker = src._worker
+    assert worker.is_alive()
+    src.stop()
+    assert not worker.is_alive()  # a detection must not still be running when the app (or the interpreter) goes away
