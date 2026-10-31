@@ -47,7 +47,7 @@ def make_hand(side="right", palm=(0, 200, 0), extended=FINGERS, normal=(0, -1, 0
 # ── Demo choreography: cycles through poses and motions ───────────────────────
 
 SCENES = [  # (seconds, label)
-    (3, "open"), (2.5, "thumbs_up"), (2.5, "ok"), (4, "circle"), (3, "swipe"), (4, "zoom"), (4, "pinch_joy"),
+    (3, "open"), (2.5, "ok"), (4, "circle"), (3, "swipe"), (4, "zoom"), (4, "pinch_joy"),
 ]
 
 
@@ -60,9 +60,7 @@ def demo_frame(t: float) -> Frame:
             break
         acc += dur
     bob = math.sin(t * 1.3) * 12
-    if label == "thumbs_up":
-        hands = [make_hand(palm=(40, 210 + bob, 0), extended={"thumb"}, normal=(-1, 0, 0), thumb=(0, 1, 0))]
-    elif label == "ok":
+    if label == "ok":
         hands = [make_hand(palm=(30, 220 + bob, 0), extended={"middle", "ring", "pinky"}, pinch=0.95)]
     elif label == "circle":
         a = p * 2 * math.pi * 1.5

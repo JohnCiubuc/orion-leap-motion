@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import importlib.util
 import logging
 import re
@@ -20,6 +21,8 @@ from .gestures.paths import PathGesture
 from .handedness import Handedness
 from .router import Router
 from .sources import DemoSource, LeapSource, Recorder, ReplaySource
+from .leap_hybrid import LeapHybridSource
+from .leap_mp import LeapMediaPipeSource
 from .webcam import WebcamSource
 
 log = logging.getLogger("orion")
@@ -75,8 +78,11 @@ class Engine:
 
     def start(self, replay: str | None = None):
         kind = "demo" if self.demo else self.cfg.general["source"]
-        cls = ReplaySource if replay else {"demo": DemoSource, "webcam": WebcamSource}.get(kind, LeapSource)
-        kw = {"path": replay} if replay else {"cfg": self.cfg["webcam"]} if cls is WebcamSource else {}
+        cls = (ReplaySource if replay else {"demo": DemoSource, "webcam": WebcamSource, "leap_mp": LeapMediaPipeSource,
+                                            "leap_hybrid": LeapHybridSource}.get(kind, LeapSource))
+        kw = ({"path": replay} if replay else {"cfg": self.cfg["webcam"]} if cls is WebcamSource
+              else {"cfg": self.cfg["leap_mp"]} if cls is LeapMediaPipeSource
+              else {"cfg": self.cfg["leap_mp"], "hybrid": self.cfg["leap_hybrid"]} if cls is LeapHybridSource else {})
         self.source = cls(self.on_frame, lambda img: self.emit("image", img),
                           ir_fps=self.cfg.general["ir_fps"], **kw)
         self.source.start()
@@ -126,8 +132,9 @@ class Engine:
         self.last_frame = time.monotonic()
         self.recorder.write(frame)  # raw labels, so replays go through the same filter
         frame = self.handedness(frame)
+        body = self._leap_view(frame)
         with self.lock:
-            events = [e for g in self.gestures for e in g.update(frame)]
+            events = [e for g in self.gestures for e in g.update(body if body and g.name == "oriondo" else frame)]
         for ev in events:
             fired = self.router.route(ev)
             if ev.phase != "update":
@@ -140,6 +147,15 @@ class Engine:
                 self._oriondo(ev)
         self.emit("frame", frame)
         self._sync_ring()
+
+    @staticmethod
+    def _leap_view(frame: Frame) -> Frame | None:
+        """The hybrid source's own Leap frame, which OrionDo reads, with the sides the handedness filter gave `frame`."""
+        if frame.leap is None:
+            return None
+        sides = {h.id: h.side for h in frame.hands}
+        return dataclasses.replace(frame.leap, hands=tuple(
+            dataclasses.replace(h, side=sides.get(h.id, h.side)) for h in frame.leap.hands))
 
     def _profile_menu(self):
         """The focused app's own OrionDo config (`[profiles.<name>.oriondo]`), or None."""

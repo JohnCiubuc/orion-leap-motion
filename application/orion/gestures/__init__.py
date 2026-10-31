@@ -3,7 +3,7 @@
 Four families, each with a decorator that turns a small function into a
 registered gesture class:
 
-    @pose("thumbs_up", hold=0.3)              fn(hand, p) -> bool
+    @pose("fist", hold=0.3)                   fn(hand, p) -> bool
     @motion("swipe", window=0.25, variants=…)  fn(track, p) -> None | True | "variant"
     @continuous("zoom", hands=2, mode="ratio") fn(left, right, p) -> measure | None
     PathGesture                               ($P recogniser over drawn strokes)
@@ -30,7 +30,7 @@ SIDES = ("left", "right")
 
 @dataclass(slots=True)
 class GestureEvent:
-    name: str  # "thumbs_up", "swipe.left", "path.circle" …
+    name: str  # "fist", "swipe.left", "path.circle" …
     phase: str  # "begin" | "update" | "end" | "fire"
     value: Any = None
     hand: str | None = None

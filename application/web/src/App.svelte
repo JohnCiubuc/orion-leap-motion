@@ -66,9 +66,10 @@
         <span class="dot" class:live={s.connected && orion.connected && !asleep} class:asleep></span>
         {#if !orion.connected}Reconnecting to engine…
         {:else if asleep}Controller asleep
-        {:else if s.connected}{s.source === "leap" ? "Leap Motion" : s.source} · {Math.round(orion.fps)} fps
+        {:else if s.connected}{({ leap: "Leap Motion", leap_mp: "Leap (MediaPipe)", leap_hybrid: "Leap + MediaPipe" })[s.source] ?? s.source} · {Math.round(orion.fps)} fps{s.agreement ? ` · ${s.agreement}` : ""}{s.fingers ? ` · ${s.fingers}` : ""}{s.delegate ? ` · ${s.delegate.toUpperCase()}` : ""}
         {:else}{s.error || "No device found"}{/if}
       </div>
+      {#if s.connected && s.error}<div class="small err">{s.error}</div>{/if}
       {#if asleep || (orion.connected && s.source === "leap" && !s.connected)}
         <button class="wake" onclick={() => send("restart_device")}><RotateCcw size={14} /> Restart controller</button>
       {/if}
@@ -123,4 +124,5 @@
   .banner.ok { background: #7ee2b814; border-color: #7ee2b840; color: var(--ok); }
   .banner.bad { background: #ff7a8a14; border-color: #ff7a8a40; color: var(--bad); }
   .savebar { position: fixed; bottom: 18px; left: calc(50% + 108px); translate: -50% 0; display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 16px; box-shadow: 0 10px 40px #000a; }
+  .err { color: var(--bad); }
 </style>

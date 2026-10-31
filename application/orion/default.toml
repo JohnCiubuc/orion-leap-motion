@@ -2,7 +2,7 @@
 # Location: ~/.config/orion-renewal/config.toml
 
 [general]
-source = "leap"          # leap | webcam | demo
+source = "leap"          # leap | leap_hybrid | leap_mp | webcam | demo
 engage_required = false  # require the "engage" gesture (open palm toward screen) before each gesture
 engage_window = 2.0      # seconds a gesture may follow "engage"
 ir_fps = 30              # raw IR stream rate in the dashboard
@@ -21,6 +21,20 @@ hand_mm = 95             # wrist to middle-knuckle length, used to estimate dist
 fov_deg = 70             # the camera's horizontal field of view
 trigger = "open_palm"   # pose that opens OrionDo on the webcam (replaces [gestures.oriondo] trigger there; "" = keep it)
 tilt = 90                # degrees to lay your hand flat: the webcam sees it upright, gestures expect it over a Leap (0 = off)
+
+# Leap (MediaPipe) source (general.source = "leap_mp"): MediaPipe Hands on both Leap IR cameras; needs `pip install -e ".[webcam]"`.
+[leap_mp]
+agree_px = 4.0           # the two cameras see the same hand when matching landmarks sit within this many rows
+hold = 0.08              # seconds a lost or disagreeing hand is repeated before it is dropped
+hand_mm = 95             # wrist to middle-knuckle length, used when only one camera sees the hand
+min_score = 0.5          # MediaPipe confidence needed to accept a hand
+delegate = "gpu"          # gpu | cpu: where MediaPipe runs (gpu is about 4x faster; falls back to cpu by itself if it cannot start)
+cameras = "left"          # left | both: left uses one camera (depth from hand_mm); both cross-checks and triangulates
+
+# Leap + MediaPipe source (general.source = "leap_hybrid"): the Leap tracks the hand, MediaPipe the fingers (it also uses [leap_mp]).
+[leap_hybrid]
+max_age = 0.12           # seconds a MediaPipe hand stays usable; after that the Leap's own fingers are used
+thumb_out = 45           # mm the thumb tip must stand out toward the thumb side of the palm to count as extended
 
 # Gesture overlay: a translucent card in a corner of the focused monitor (layer-shell, click-through).
 [overlay]
@@ -124,11 +138,6 @@ args = { cmd = "workspace e-1" }
 gesture = "swipe.right"
 action = "hypr.dispatch"
 args = { cmd = "workspace e+1" }
-
-[[bindings]]
-gesture = "thumbs_up"
-action = "media"
-args = { op = "PlayPause" }
 
 [[bindings]]
 gesture = "thumbs_down"

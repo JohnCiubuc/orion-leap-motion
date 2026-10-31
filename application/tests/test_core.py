@@ -1,9 +1,12 @@
 """Gesture recognition, routing and config round-trips — all on synthetic hands, no device needed."""
 
+import gzip
+import json
 import math
 import os
 import tempfile
 import tomllib
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -14,7 +17,7 @@ from orion.actions import ACTIONS, Action, load_builtins as load_actions  # noqa
 from orion.config import Config  # noqa: E402
 from orion.frame import Frame, from_dict, pack_skeleton, to_dict  # noqa: E402
 from orion.gestures import REGISTRY, GestureEvent, load_builtins  # noqa: E402
-from orion.gestures.fingers import FingerMotion  # noqa: E402
+from orion.gestures.fingers import FingerMotion, pinch_strength, thumb_contact, thumb_touch  # noqa: E402
 from orion.gestures.paths import PathGesture, _resample  # noqa: E402
 from orion.gestures.precision import PrecisionLock  # noqa: E402
 from orion.router import Router  # noqa: E402
@@ -33,12 +36,17 @@ def hold(hand, seconds=1.2, fps=100):
     return [Frame(t=i / fps, hands=(hand,)) for i in range(int(seconds * fps))]
 
 
+def with_thumb_at(hand, finger, offset=(0, 0, 3)):
+    """`hand` with its thumb tip moved onto `finger`'s tip."""
+    hand["thumb"].joints[-1] = hand[finger].tip + np.asarray(offset, np.float32)
+    return hand
+
+
 # ── Poses ─────────────────────────────────────────────────────────────────────
 
 POSES = {
-    "thumbs_up": make_hand(extended={"thumb"}, normal=(-1, 0, 0), thumb=(0, 1, 0)),
     "thumbs_down": make_hand(extended={"thumb"}, normal=(-1, 0, 0), thumb=(0, -1, 0)),
-    "ok": make_hand(extended={"middle", "ring", "pinky"}, pinch=0.95),
+    "ok": with_thumb_at(make_hand(extended={"middle", "ring", "pinky"}, pinch=0.95), "index"),
     "fist": make_hand(extended=set()),
     "open_palm": make_hand(),
     "peace": make_hand(extended={"index", "middle"}),
@@ -51,15 +59,15 @@ def test_pose_detected(name):
 
 
 def test_pose_not_confused():
-    assert run(REGISTRY["thumbs_up"](), hold(POSES["thumbs_down"])) == []
+    assert run(REGISTRY["thumbs_down"](), hold(POSES["fist"])) == []
     assert run(REGISTRY["fist"](), hold(POSES["open_palm"])) == []
 
 
 def test_pose_hold_and_end():
-    g = REGISTRY["thumbs_up"]({"hold": 0.5})
-    assert run(g, hold(POSES["thumbs_up"], 0.3)) == []  # not held long enough
-    frames = hold(POSES["thumbs_up"], 1.0) + [Frame(t=1.5 + i / 100, hands=()) for i in range(30)]
-    assert run(REGISTRY["thumbs_up"](), frames) == [("thumbs_up", "begin"), ("thumbs_up", "end")]
+    g = REGISTRY["thumbs_down"]({"hold": 0.5})
+    assert run(g, hold(POSES["thumbs_down"], 0.3)) == []  # not held long enough
+    frames = hold(POSES["thumbs_down"], 1.0) + [Frame(t=1.5 + i / 100, hands=()) for i in range(30)]
+    assert run(REGISTRY["thumbs_down"](), frames) == [("thumbs_down", "begin"), ("thumbs_down", "end")]
 
 
 # ── Motions ───────────────────────────────────────────────────────────────────
@@ -291,7 +299,7 @@ def test_joystick_ratchets_by_distance_not_time():
     assert phases[0] == "begin" and phases[-1] == "end"
 
 
-def test_grab_joystick_ignores_thumbs_up():
+def test_grab_joystick_ignores_a_lone_thumb():
     thumbs = make_hand(extended={"thumb"}, normal=(-1, 0, 0), thumb=(0, 1, 0), grab=0.95)
     assert run(REGISTRY["grab_joy"](), hold(thumbs)) == []
 
@@ -1634,3 +1642,219 @@ def test_oriondo_a_flick_right_after_entering_does_not_tap_close():
     _, t = feed(g, t + 0.08, index_hand(*o), 30)
     evs = [e for i in range(8) for e in feed(g, t + i / 100, index_hand(o[0], o[1], dip=i * 1.5))[0]]
     assert key_events(evs) == [("end", "tap")]  # a real one, later, still closes
+
+
+# ── Thumb touching middle / ring / pinky ──────────────────────────────────────
+
+TOUCHES = ("touch_middle", "touch_ring", "touch_pinky")
+
+
+def test_thumb_touch_poses_registered():
+    assert all(n in REGISTRY for n in TOUCHES)
+
+
+def test_pinky_touch_synthetic():
+    hand = with_thumb_at(make_hand(pinch=0.95), "pinky")
+    assert thumb_contact(hand) == thumb_touch(hand) == "pinky"
+    assert pinch_strength(hand) == 0.0  # Leap's pinch also reads high here; thumb-index gestures must not see it
+    assert run(REGISTRY["touch_pinky"](), hold(hand)) == [("touch_pinky", "begin")]
+    assert run(REGISTRY["touch_ring"](), hold(hand)) == run(REGISTRY["touch_middle"](), hold(hand)) == []
+
+
+def test_no_contact_leaves_pinch_alone():
+    hand = make_hand(pinch=0.95)
+    assert thumb_contact(hand) is None and pinch_strength(hand) == 0.95
+    assert all(run(REGISTRY[n](), hold(hand)) == [] for n in TOUCHES)
+
+
+def test_fist_and_peace_are_not_touches():
+    fist = with_thumb_at(make_hand(extended=set(), grab=1.0), "middle")
+    assert thumb_touch(fist) is None
+    peace = with_thumb_at(make_hand(extended={"index", "middle"}), "ring")  # thumb holds ring + pinky down
+    assert thumb_touch(peace) is None
+    assert pinch_strength(with_thumb_at(make_hand(extended={"index", "middle"}, pinch=0.95), "ring")) == 0.0
+
+
+def test_moving_hand_is_not_a_touch():
+    moving = with_thumb_at(make_hand(velocity=(0, 150, 0)), "pinky")
+    assert run(REGISTRY["touch_pinky"](), hold(moving)) == []
+
+
+FIXTURE = Path(__file__).parent / "data" / "thumb_touch.orec"  # real hand: thumb to middle, ring, pinky, index; peace; fist; relaxed
+# when each shape is held, in seconds into the recording
+SEGMENTS = {"touch_middle": (2.4, 3.8), "touch_ring": (4.9, 6.7), "touch_pinky": (7.9, 9.8), "ok": (10.4, 13.0),
+            "peace": (16.4, 18.7), "fist": (19.3, 21.5)}
+
+
+def recorded_begins():
+    frames = [from_dict(json.loads(line)) for line in gzip.open(FIXTURE, "rt")]
+    gestures = {n: REGISTRY[n]() for n in (*TOUCHES, "pinch", "ok", "peace", "fist", "open_palm")}
+    return {n: [round(e.t, 2) for f in frames for e in g.update(f) if e.phase == "begin"] for n, g in gestures.items()}
+
+
+def test_recorded_touches_fire_once_each_in_their_segment():
+    begins = recorded_begins()
+    for name in TOUCHES:
+        (a, b), got = SEGMENTS[name], begins[name]
+        assert len(got) == 1 and a <= got[0] <= b, (name, got)
+
+
+def test_recorded_touches_do_not_trigger_other_gestures():
+    begins = recorded_begins()
+    inside = lambda t, *names: any(SEGMENTS[n][0] <= t <= SEGMENTS[n][1] for n in names)  # noqa: E731
+    assert all(inside(t, "ok", "fist") for t in begins["pinch"]), begins["pinch"]  # not on touches, not on peace
+    assert all(inside(t, "ok") for t in begins["ok"]), begins["ok"]
+    assert any(inside(t, "peace") for t in begins["peace"])  # (a stray peace at the very end, on the relaxed hand, predates this)
+    assert all(inside(t, "fist") for t in begins["fist"]) and begins["fist"], begins["fist"]
+
+
+# ── LeapSource hooks ──────────────────────────────────────────────────────────
+
+def fake_leap_images(*fills):
+    """Two 640×240 LEAP_IMAGE structs backed by C buffers filled with `fills`, as the listener receives them."""
+    from types import SimpleNamespace as NS
+    from leapc_cffi import ffi
+    keep, images = [], []
+    for fill in fills:
+        buf, img = ffi.new("uint8_t[]", [fill] * (640 * 240)), ffi.new("LEAP_IMAGE*")
+        img.properties.width, img.properties.height, img.properties.bpp = 640, 240, 1
+        img.data, img.offset = ffi.cast("void*", buf), 0
+        keep += [buf, img]
+        images.append(NS(c_data=img[0]))
+    return NS(image=images, keep=keep)
+
+
+def test_leap_source_tracking_hook_emits_a_frame():
+    from types import SimpleNamespace as NS
+    from orion.sources import LeapSource
+    v = lambda x, y, z: NS(x=x, y=y, z=z)  # noqa: E731
+    bone = NS(prev_joint=v(0, 0, 0), next_joint=v(0, 10, 0))
+    palm = NS(position=v(1, 2, 3), stabilized_position=v(1, 2, 3), velocity=v(0, 0, 0), normal=v(0, -1, 0), direction=v(0, 0, -1))
+    hand = NS(id=7, type="HandType.Left", confidence=.8, pinch_strength=.1, grab_strength=.2, palm=palm,
+              digits=[NS(is_extended=True, bones=[bone] * 4)] * 5)
+    frames = []
+    LeapSource(frames.append, lambda img: None)._tracking(NS(timestamp=2_000_000, framerate=110.0, hands=[hand]))
+    assert len(frames) == 1 and frames[0].t == 2.0
+
+
+def test_raw_images_copies_both_cameras():
+    pytest.importorskip("leapc_cffi")
+    from orion.sources import raw_images
+    event = fake_leap_images(7, 9)
+    got = raw_images(event)
+    assert [(w, h, set(px)) for w, h, px in got] == [(640, 240, {7}), (640, 240, {9})]
+
+
+def test_images_hook_stacks_the_pair_for_the_ui():
+    pytest.importorskip("leapc_cffi")
+    from orion.sources import LeapSource
+    sent = []
+    src = LeapSource(lambda f: None, sent.append)
+    src.ir = True
+    src._images(fake_leap_images(1, 2))
+    assert (sent[0].width, sent[0].height) == (640, 480) and sent[0].pixels[0] == 1 and sent[0].pixels[-1] == 2
+
+
+def test_thumb_contact_ignores_depth():
+    # The camera looks up the y axis, so a monocular source knows y (depth) worst: tips that coincide in the image touch.
+    deep = with_thumb_at(make_hand(pinch=0.95), "pinky", offset=(0, 40, 3))
+    assert thumb_contact(deep) == thumb_touch(deep) == "pinky"
+    assert pinch_strength(deep) == 0.0
+
+
+def test_thumb_contact_needs_the_tips_to_be_close_in_the_image():
+    assert thumb_contact(with_thumb_at(make_hand(), "pinky", offset=(0, 0, 28))) == "pinky"  # the looser, in-image range
+    assert thumb_contact(with_thumb_at(make_hand(), "pinky", offset=(0, 0, 45))) is None
+
+
+# Real MediaPipe session (left camera only, ~28 fps of a hand doing each pose for ~4 s) as the leap_mp source produced it,
+# palm down and palm up. Checks the pose rules against MediaPipe's geometry, where depth is weak.
+MP_FIXTURE = Path(__file__).parent / "data" / "mediapipe_touch.orec"
+MP_POSES = ("touch_middle", "touch_ring", "touch_pinky", "pinch", "ok", "peace", "fist", "open_palm")
+
+
+def mediapipe_begins():
+    by_phase = {}
+    for line in gzip.open(MP_FIXTURE, "rt"):
+        d = json.loads(line)
+        by_phase.setdefault(d["phase"], []).append(from_dict(d))
+    out = {}
+    for phase, frames in by_phase.items():
+        gestures = {n: REGISTRY[n]() for n in MP_POSES}
+        out[phase] = {n: sum(e.phase == "begin" for f in frames for e in g.update(f)) for n, g in gestures.items()}
+    return out
+
+
+@pytest.mark.parametrize("phase", ["touch_middle", "touch_ring", "touch_pinky", "peace", "fist"])
+def test_mediapipe_session_fires_the_pose_it_shows(phase):
+    begins = mediapipe_begins()[phase]
+    others = sum(v for k, v in begins.items() if k != "open_palm")  # an open hand at the start of a phase carries over from the last
+    assert begins[phase] == 1 and others == 1, begins  # exactly that pose, once, and nothing else
+
+
+@pytest.mark.parametrize("phase", ["still", "ok", "relaxed", "away", "up_open"])
+def test_mediapipe_session_other_poses_are_not_touches(phase):
+    begins = mediapipe_begins()[phase]
+    assert not any(begins[n] for n in ("touch_middle", "touch_ring", "touch_pinky", "peace", "fist")), begins
+
+
+@pytest.mark.parametrize("phase", ["up_touch_middle", "up_touch_ring", "up_touch_pinky"])
+def test_mediapipe_session_palm_up_touches_are_ignored(phase):
+    begins = mediapipe_begins()[phase]
+    assert not any(begins[n] for n in ("touch_middle", "touch_ring", "touch_pinky")), begins  # the palm hides the fingers
+
+
+def test_mediapipe_session_palm_up_open_hand_still_reads():
+    assert mediapipe_begins()["up_open"]["open_palm"] >= 1
+
+
+def test_thumbs_up_is_not_a_gesture():
+    assert "thumbs_up" not in REGISTRY and "thumbs_down" in REGISTRY
+
+
+def test_default_bindings_name_registered_gestures():
+    for b in tomllib.loads((Path(__file__).parent.parent / "orion" / "default.toml").read_text())["bindings"]:
+        assert b["gesture"].split(".")[0] in REGISTRY, b  # a binding to a removed gesture could never fire
+
+
+# ── Palm up: the palm hides the fingers from the camera, so touches are ignored ───────────────
+
+def test_palm_up_touches_are_ignored():
+    hand = with_thumb_at(make_hand(normal=(0, 1, 0)), "pinky")
+    assert thumb_contact(hand) == "pinky" and thumb_touch(hand) is None
+    assert run(REGISTRY["touch_pinky"](), hold(hand)) == []
+
+
+def test_palm_sideways_still_touches():
+    assert thumb_touch(with_thumb_at(make_hand(normal=(1, 0, 0)), "pinky")) == "pinky"
+
+
+def test_palm_up_open_hand_and_fist_still_read():
+    assert ("open_palm", "begin") in run(REGISTRY["open_palm"](), hold(make_hand(normal=(0, 1, 0))))
+    assert ("fist", "begin") in run(REGISTRY["fist"](), hold(make_hand(extended=set(), normal=(0, 1, 0))))
+
+
+# ── Frame.leap: the hybrid source's untouched Leap frame, which OrionDo reads ────────────────
+
+def test_oriondo_gets_the_leap_frame_with_filtered_sides(tmp_path):
+    import dataclasses
+    from orion.engine import Engine
+
+    class Spy:
+        def __init__(self, name):
+            self.name, self.seen = name, None
+
+        def update(self, frame):
+            self.seen = frame
+            return ()
+    path = tmp_path / "config.toml"
+    path.write_text("")
+    engine = Engine(Config(path), dry_run=True)
+    engine.gestures = [Spy("oriondo"), Spy("swipe")]
+    leap_hand = make_hand("right")  # the tracker's first guess; the handedness filter settles on the preferred "left"
+    merged = dataclasses.replace(leap_hand, pinch=0.9)
+    assert Frame(t=0).leap is None
+    engine.on_frame(Frame(t=1.0, hands=(merged,), source="leap_hybrid", leap=Frame(t=1.0, hands=(leap_hand,))))
+    oriondo, other = engine.gestures[0].seen, engine.gestures[1].seen
+    assert oriondo.hands[0].pinch == leap_hand.pinch and other.hands[0].pinch == 0.9
+    assert oriondo.hands[0].side == other.hands[0].side == "left"

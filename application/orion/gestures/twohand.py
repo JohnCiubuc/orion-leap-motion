@@ -5,7 +5,7 @@ import math
 import numpy as np
 
 from . import Continuous, continuous, register
-from .fingers import FingerMotion
+from .fingers import FingerMotion, pinch_strength
 from .precision import PrecisionLock
 
 
@@ -16,7 +16,7 @@ def _pinch_point(h):
 @continuous("zoom", hands=2, mode="ratio", pinch=(0.7, 0.3, 1.0))
 def zoom(l, r, p):
     """Both hands pinching, pulled apart / pushed together. Value: scale (1.0 = start)."""
-    if l.pinch > p["pinch"] and r.pinch > p["pinch"]:
+    if pinch_strength(l) > p["pinch"] and pinch_strength(r) > p["pinch"]:
         return float(np.linalg.norm(_pinch_point(r) - _pinch_point(l)))
     return None
 
@@ -24,7 +24,7 @@ def zoom(l, r, p):
 @continuous("rotate", hands=2, mode="delta", pinch=(0.7, 0.3, 1.0))
 def rotate(l, r, p):
     """Both hands pinching, turned like a steering wheel. Value: degrees from start (+ = clockwise)."""
-    if l.pinch > p["pinch"] and r.pinch > p["pinch"]:
+    if pinch_strength(l) > p["pinch"] and pinch_strength(r) > p["pinch"]:
         d = _pinch_point(r) - _pinch_point(l)
         return -math.degrees(math.atan2(d[1], d[0]))
     return None
@@ -162,4 +162,4 @@ class DesktopPointer(Pointer):
 @continuous("pinch_drag", hands=1, mode="delta", strength=(0.85, 0.3, 1.0))
 def pinch_drag(h, p):
     """Pinch and move. Value: (dx, dy, dz) mm from where the pinch started."""
-    return h.palm if h.pinch > p["strength"] else None
+    return h.palm if pinch_strength(h) > p["strength"] else None

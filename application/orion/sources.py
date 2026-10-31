@@ -53,29 +53,46 @@ class Source:
 
 # ── Live device (LeapC service) ───────────────────────────────────────────────
 
+def raw_images(e) -> list[tuple[int, int, bytes]]:
+    """(width, height, pixels) of each camera's image in an image event, copied now: the C buffer is only valid during the callback."""
+    from leapc_cffi import ffi
+    out = []
+    for img in e.image:
+        p = img.c_data.properties
+        ptr = ffi.cast("uint8_t*", img.c_data.data) + img.c_data.offset
+        out.append((p.width, p.height, bytes(ffi.buffer(ptr, p.width * p.height * p.bpp))))
+    return out
+
+
 class LeapSource(Source):
     name = "leap"
+    always_images = False  # a subclass that needs the raw images whether or not the UI shows them
+
+    # Hooks the listener calls, so a subclass can take the events instead.
+    def _tracking(self, e):
+        self.on_frame(from_leap(e))
+
+    def _images(self, e):
+        def grab():
+            imgs = raw_images(e)
+            return IRImage(imgs[0][0], imgs[0][1] * 2, b"".join(px for _, _, px in imgs))
+        self._emit_ir(grab)
+
+    def _on_open(self, conn):
+        """Called each time a connection to the tracking service opens."""
 
     def run(self):
         import leap
         from leap.enums import PolicyFlag
-        from leapc_cffi import ffi
 
         src = self
 
         class Listener(leap.Listener):
             def on_tracking_event(self, e):
-                src.on_frame(from_leap(e))
+                src._tracking(e)
 
             def on_image_event(self, e):
-                def grab():  # copy now: the C buffer is only valid during this callback
-                    bufs = []
-                    for img in e.image:
-                        p = img.c_data.properties
-                        ptr = ffi.cast("uint8_t*", img.c_data.data) + img.c_data.offset
-                        bufs.append(bytes(ffi.buffer(ptr, p.width * p.height * p.bpp)))
-                    return IRImage(p.width, p.height * 2, b"".join(bufs))
-                src._emit_ir(grab)
+                src._images(e)
 
             def on_device_event(self, e):
                 src.status.update(connected=True)
@@ -99,8 +116,9 @@ class LeapSource(Source):
             try:
                 with conn.open():
                     self._conn = conn
+                    self._on_open(conn)
                     conn.set_tracking_mode(leap.TrackingMode.Desktop)
-                    if self._ir:  # the UI may have asked for IR before we connected
+                    if self._ir or self.always_images:  # the UI may have asked for IR before we connected
                         conn.set_policy_flags(flags_to_set=[self._flag])
                     while not (self._stop.is_set() or self._kick.wait(0.5)):
                         pass
@@ -116,7 +134,7 @@ class LeapSource(Source):
         from leap.enums import PolicyFlag
         from leapc_cffi import libleapc
         self._conn.set_policy_flags(flags_to_set=[PolicyFlag.AllowPauseResume])
-        libleapc.LeapSetPause(self._conn.get_connection_ptr()[0], False)
+        libleapc.LeapSetPause(self._conn.get_connection_ptr(), False)
 
     def restart(self, service=False) -> str:
         """Unpause → USB reset (like replugging) → reconnect. `service` restarts the daemon first."""
@@ -142,7 +160,7 @@ class LeapSource(Source):
 
     @Source.ir.setter
     def ir(self, on: bool):
-        if on == self._ir or not hasattr(self, "_conn"):
+        if on == self._ir or not hasattr(self, "_conn") or self.always_images:
             self._ir = on
             return
         self._ir = on
