@@ -62,6 +62,7 @@ class Frame:
     fps: float = 0.0
     hands: tuple[Hand, ...] = ()
     source: str = "leap"
+    leap: Frame | None = None  # the hybrid source's untouched Leap frame (its `hands` carry another tracker's fingers)
 
     def hand(self, side: str) -> Hand | None:
         return next((h for h in self.hands if h.side == side), None)

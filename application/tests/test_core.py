@@ -1832,3 +1832,29 @@ def test_palm_sideways_still_touches():
 def test_palm_up_open_hand_and_fist_still_read():
     assert ("open_palm", "begin") in run(REGISTRY["open_palm"](), hold(make_hand(normal=(0, 1, 0))))
     assert ("fist", "begin") in run(REGISTRY["fist"](), hold(make_hand(extended=set(), normal=(0, 1, 0))))
+
+
+# ── Frame.leap: the hybrid source's untouched Leap frame, which OrionDo reads ────────────────
+
+def test_oriondo_gets_the_leap_frame_with_filtered_sides(tmp_path):
+    import dataclasses
+    from orion.engine import Engine
+
+    class Spy:
+        def __init__(self, name):
+            self.name, self.seen = name, None
+
+        def update(self, frame):
+            self.seen = frame
+            return ()
+    path = tmp_path / "config.toml"
+    path.write_text("")
+    engine = Engine(Config(path), dry_run=True)
+    engine.gestures = [Spy("oriondo"), Spy("swipe")]
+    leap_hand = make_hand("right")  # the tracker's first guess; the handedness filter settles on the preferred "left"
+    merged = dataclasses.replace(leap_hand, pinch=0.9)
+    assert Frame(t=0).leap is None
+    engine.on_frame(Frame(t=1.0, hands=(merged,), source="leap_hybrid", leap=Frame(t=1.0, hands=(leap_hand,))))
+    oriondo, other = engine.gestures[0].seen, engine.gestures[1].seen
+    assert oriondo.hands[0].pinch == leap_hand.pinch and other.hands[0].pinch == 0.9
+    assert oriondo.hands[0].side == other.hands[0].side == "left"

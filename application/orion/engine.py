@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import importlib.util
 import logging
 import re
@@ -128,8 +129,9 @@ class Engine:
         self.last_frame = time.monotonic()
         self.recorder.write(frame)  # raw labels, so replays go through the same filter
         frame = self.handedness(frame)
+        body = self._leap_view(frame)
         with self.lock:
-            events = [e for g in self.gestures for e in g.update(frame)]
+            events = [e for g in self.gestures for e in g.update(body if body and g.name == "oriondo" else frame)]
         for ev in events:
             fired = self.router.route(ev)
             if ev.phase != "update":
@@ -142,6 +144,15 @@ class Engine:
                 self._oriondo(ev)
         self.emit("frame", frame)
         self._sync_ring()
+
+    @staticmethod
+    def _leap_view(frame: Frame) -> Frame | None:
+        """The hybrid source's own Leap frame, which OrionDo reads, with the sides the handedness filter gave `frame`."""
+        if frame.leap is None:
+            return None
+        sides = {h.id: h.side for h in frame.hands}
+        return dataclasses.replace(frame.leap, hands=tuple(
+            dataclasses.replace(h, side=sides.get(h.id, h.side)) for h in frame.leap.hands))
 
     def _profile_menu(self):
         """The focused app's own OrionDo config (`[profiles.<name>.oriondo]`), or None."""
