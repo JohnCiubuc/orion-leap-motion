@@ -30,7 +30,7 @@
     </div>
     <div class="row">
       <div><h3>Tracking source</h3><p class="muted">Demo generates synthetic hands for trying Orion without a device. Applies on restart.</p></div>
-      <select bind:value={g.source}><option value="leap">Leap Motion</option><option value="webcam">Webcam</option><option value="demo">Demo</option></select>
+      <select bind:value={g.source}><option value="leap">Leap Motion</option><option value="leap_mp">Leap (MediaPipe)</option><option value="webcam">Webcam</option><option value="demo">Demo</option></select>
     </div>
     {#if g.source === "webcam" && w}
       <div class="row">

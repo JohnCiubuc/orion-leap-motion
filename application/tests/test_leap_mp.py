@@ -256,3 +256,27 @@ def test_preview_draws_dots_without_touching_the_inputs():
     stacked = np.frombuffer(img.pixels, np.uint8).reshape(480, 640)
     assert (img.width, img.height) == (640, 480) and stacked[50, 100] == 255 and stacked[240 + 50, 100] == 0
     assert not left.any() and not right.any()
+
+
+# ── Config and engine ─────────────────────────────────────────────────────────
+
+def test_leap_mp_defaults_load(tmp_path):
+    from orion.config import Config
+    path = tmp_path / "config.toml"
+    path.write_text("[leap_mp]\nagree_px = 6.0\n")
+    cfg = Config(path)
+    assert cfg["leap_mp"] == {"agree_px": 6.0, "hold": 0.08, "hand_mm": 95, "min_score": 0.5}
+
+
+def test_engine_starts_the_leap_mp_source(tmp_path, monkeypatch):
+    from orion.actions import hyprland
+    from orion.config import Config
+    from orion.engine import Engine
+    from orion.sources import Source
+    monkeypatch.setattr(Source, "start", lambda self: None)  # no device threads in a unit test
+    monkeypatch.setattr(hyprland, "watch_active_window", lambda fn: None)
+    path = tmp_path / "config.toml"
+    path.write_text('[general]\nsource = "leap_mp"\n')
+    engine = Engine(Config(path), dry_run=True)
+    engine.start()
+    assert isinstance(engine.source, LeapMediaPipeSource) and engine.source.cfg["agree_px"] == 4.0
