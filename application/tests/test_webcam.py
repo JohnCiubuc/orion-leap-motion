@@ -436,3 +436,10 @@ def test_points_to_hand_reads_a_leap_hand():
     h = points_to_hand(landmarks(hand), palm_of(hand), "right", 0.9)
     assert h.extended == hand.extended and h.side == "right" and h.pinch == 0
     assert np.allclose(h.normal, hand.normal, atol=0.1) and np.allclose(h.direction, hand.direction, atol=0.1)
+
+
+def test_points_to_hand_takes_its_own_extension_cutoffs():
+    hand = facing(extended={"index", "middle"})
+    assert points_to_hand(landmarks(hand), palm_of(hand), "right", 0.9).extended == hand.extended
+    strict = points_to_hand(landmarks(hand), palm_of(hand), "right", 0.9, extend=(1.5, 1.5))  # nothing is that straight
+    assert strict.extended == frozenset()

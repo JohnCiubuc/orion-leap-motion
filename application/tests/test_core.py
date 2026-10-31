@@ -36,12 +36,18 @@ def hold(hand, seconds=1.2, fps=100):
     return [Frame(t=i / fps, hands=(hand,)) for i in range(int(seconds * fps))]
 
 
+def with_thumb_at(hand, finger, offset=(0, 0, 3)):
+    """`hand` with its thumb tip moved onto `finger`'s tip."""
+    hand["thumb"].joints[-1] = hand[finger].tip + np.asarray(offset, np.float32)
+    return hand
+
+
 # ── Poses ─────────────────────────────────────────────────────────────────────
 
 POSES = {
     "thumbs_up": make_hand(extended={"thumb"}, normal=(-1, 0, 0), thumb=(0, 1, 0)),
     "thumbs_down": make_hand(extended={"thumb"}, normal=(-1, 0, 0), thumb=(0, -1, 0)),
-    "ok": make_hand(extended={"middle", "ring", "pinky"}, pinch=0.95),
+    "ok": with_thumb_at(make_hand(extended={"middle", "ring", "pinky"}, pinch=0.95), "index"),
     "fist": make_hand(extended=set()),
     "open_palm": make_hand(),
     "peace": make_hand(extended={"index", "middle"}),
@@ -1644,12 +1650,6 @@ def test_oriondo_a_flick_right_after_entering_does_not_tap_close():
 TOUCHES = ("touch_middle", "touch_ring", "touch_pinky")
 
 
-def with_thumb_at(hand, finger, offset=(0, 0, 3)):
-    """`hand` with its thumb tip moved onto `finger`'s tip."""
-    hand["thumb"].joints[-1] = hand[finger].tip + np.asarray(offset, np.float32)
-    return hand
-
-
 def test_thumb_touch_poses_registered():
     assert all(n in REGISTRY for n in TOUCHES)
 
@@ -1754,3 +1754,45 @@ def test_images_hook_stacks_the_pair_for_the_ui():
     src.ir = True
     src._images(fake_leap_images(1, 2))
     assert (sent[0].width, sent[0].height) == (640, 480) and sent[0].pixels[0] == 1 and sent[0].pixels[-1] == 2
+
+
+def test_thumb_contact_ignores_depth():
+    # The camera looks up the y axis, so a monocular source knows y (depth) worst: tips that coincide in the image touch.
+    deep = with_thumb_at(make_hand(pinch=0.95), "pinky", offset=(0, 40, 3))
+    assert thumb_contact(deep) == thumb_touch(deep) == "pinky"
+    assert pinch_strength(deep) == 0.0
+
+
+def test_thumb_contact_needs_the_tips_to_be_close_in_the_image():
+    assert thumb_contact(with_thumb_at(make_hand(), "pinky", offset=(0, 0, 28))) == "pinky"  # the looser, in-image range
+    assert thumb_contact(with_thumb_at(make_hand(), "pinky", offset=(0, 0, 45))) is None
+
+
+# Real MediaPipe session (left camera only, ~28 fps of a hand doing each pose for ~4 s), with finger extension and pinch
+# re-derived as the leap_mp source computes them. Checks the pose rules against MediaPipe's geometry, where depth is weak.
+MP_FIXTURE = Path(__file__).parent / "data" / "mediapipe_touch.orec"
+MP_POSES = ("touch_middle", "touch_ring", "touch_pinky", "pinch", "ok", "peace", "fist")
+
+
+def mediapipe_begins():
+    by_phase = {}
+    for line in gzip.open(MP_FIXTURE, "rt"):
+        d = json.loads(line)
+        by_phase.setdefault(d["phase"], []).append(from_dict(d))
+    out = {}
+    for phase, frames in by_phase.items():
+        gestures = {n: REGISTRY[n]() for n in MP_POSES}
+        out[phase] = {n: sum(e.phase == "begin" for f in frames for e in g.update(f)) for n, g in gestures.items()}
+    return out
+
+
+@pytest.mark.parametrize("phase", ["touch_middle", "touch_ring", "touch_pinky", "peace", "fist"])
+def test_mediapipe_session_fires_the_pose_it_shows(phase):
+    begins = mediapipe_begins()[phase]
+    assert begins[phase] == 1 and sum(begins.values()) == 1, begins  # exactly that pose, once, and nothing else
+
+
+@pytest.mark.parametrize("phase", ["still", "ok", "relaxed", "away"])
+def test_mediapipe_session_other_poses_are_not_touches(phase):
+    begins = mediapipe_begins()[phase]
+    assert not any(begins[n] for n in ("touch_middle", "touch_ring", "touch_pinky", "peace", "fist")), begins

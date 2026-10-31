@@ -59,11 +59,11 @@ def _unit(v: np.ndarray) -> np.ndarray:
     return (v / (np.linalg.norm(v) or 1.0)).astype(np.float32)
 
 
-def _extended(straightness: float, was: bool) -> bool:
+def _extended(straightness: float, was: bool, on: float = EXTEND_ON, off: float = EXTEND_OFF) -> bool:
     """Between the two cut-offs a finger keeps its previous state, so it doesn't flicker."""
-    if straightness >= EXTEND_ON:
+    if straightness >= on:
         return True
-    return was and straightness >= EXTEND_OFF
+    return was and straightness >= off
 
 
 def _straightness(pts: np.ndarray) -> float:
@@ -114,14 +114,16 @@ def landmarks_to_hand(det: Detection, cam: Cam, prev_extended: frozenset[str] = 
 
 
 def points_to_hand(w: np.ndarray, palm: np.ndarray, label: str, score: float,
-                   prev_extended: frozenset[str] = frozenset(), hid: int = 0) -> Hand:
-    """The 21 landmarks `w` (mm, Leap axes and position, MediaPipe order) as a `Hand` whose palm is at `palm`."""
+                   prev_extended: frozenset[str] = frozenset(), hid: int = 0,
+                   extend: tuple[float, float] = (EXTEND_ON, EXTEND_OFF)) -> Hand:
+    """The 21 landmarks `w` (mm, Leap axes and position, MediaPipe order) as a `Hand` whose palm is at `palm`.
+    `extend` is the (on, off) straightness a finger needs to count as extended."""
     fingers, straight = [], []
     for k, name in enumerate(FINGERS):
         pts = w[4 * k + 1:4 * k + 5]
         straight.append(_straightness(pts))
         joints = np.vstack((w[0], pts)).astype(np.float32)
-        fingers.append(Finger(name, _extended(straight[-1], name in prev_extended), joints))
+        fingers.append(Finger(name, _extended(straight[-1], name in prev_extended, *extend), joints))
     pinch = min(max((PINCH_OPEN - float(np.linalg.norm(w[4] - w[8]))) / (PINCH_OPEN - PINCH_CLOSED), 0.0), 1.0)
     grab = float(np.mean([min(max((GRAB_OPEN - s) / (GRAB_OPEN - GRAB_CLOSED), 0.0), 1.0) for s in straight[1:]]))
     normal = np.cross(w[5] - w[0], w[17] - w[0]) * (-1 if label == "left" else 1)

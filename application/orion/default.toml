@@ -28,6 +28,8 @@ agree_px = 4.0           # the two cameras see the same hand when matching landm
 hold = 0.08              # seconds a lost or disagreeing hand is repeated before it is dropped
 hand_mm = 95             # wrist to middle-knuckle length, used when only one camera sees the hand
 min_score = 0.5          # MediaPipe confidence needed to accept a hand
+delegate = "gpu"          # gpu | cpu: where MediaPipe runs (gpu is about 4x faster; falls back to cpu by itself if it cannot start)
+cameras = "left"          # left | both: left uses one camera (depth from hand_mm); both cross-checks and triangulates
 
 # Gesture overlay: a translucent card in a corner of the focused monitor (layer-shell, click-through).
 [overlay]

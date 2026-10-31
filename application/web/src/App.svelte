@@ -66,7 +66,7 @@
         <span class="dot" class:live={s.connected && orion.connected && !asleep} class:asleep></span>
         {#if !orion.connected}Reconnecting to engine…
         {:else if asleep}Controller asleep
-        {:else if s.connected}{({ leap: "Leap Motion", leap_mp: "Leap (MediaPipe)" })[s.source] ?? s.source} · {Math.round(orion.fps)} fps{s.agreement ? ` · ${s.agreement}` : ""}
+        {:else if s.connected}{({ leap: "Leap Motion", leap_mp: "Leap (MediaPipe)" })[s.source] ?? s.source} · {Math.round(orion.fps)} fps{s.agreement ? ` · ${s.agreement}` : ""}{s.delegate ? ` · ${s.delegate.toUpperCase()}` : ""}
         {:else}{s.error || "No device found"}{/if}
       </div>
       {#if s.connected && s.error}<div class="small err">{s.error}</div>{/if}

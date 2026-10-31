@@ -31,7 +31,7 @@ class FingerMotion:
 # Leap's `pinch` is thumb-to-ANY-finger (it reads ~1.0 on a middle/ring/pinky touch, and on a peace sign),
 # and `extended` is unreliable once the thumb touches, so contact is judged from the tips themselves.
 
-TOUCH = 22.0  # mm: a fingertip this close to the thumb tip is touching
+TOUCH = 30.0  # mm across the camera's image plane (x, z): a fingertip this close to the thumb tip is touching. Depth (y) is ignored: a monocular source knows it worst, and touching tips coincide in the image
 MARGIN = 6.0  # mm: when two tips are that close, the one level with the thumb tip (along the fingers) must lead by this much
 SHAPE = {"grab": 0.7, "straight": 0.85}  # shortcut: tuned on one recording of loose curls, retune on other hand shapes
 
@@ -43,12 +43,12 @@ def straightness(finger) -> float:
 
 
 def _tips(h):
-    """[(|offset along the fingers|, distance, name)] of each fingertip from the thumb tip."""
+    """[(|offset along the fingers|, distance across the image plane, name)] of each fingertip from the thumb tip."""
     tip, along = h["thumb"].tip, h.direction
     out = []
     for name in ("index", "middle", "ring", "pinky"):
         v = h[name].tip - tip
-        out.append((abs(float(v @ along)), float(np.linalg.norm(v)), name))
+        out.append((abs(float(v @ along)), float(np.hypot(v[0], v[2])), name))
     return out
 
 

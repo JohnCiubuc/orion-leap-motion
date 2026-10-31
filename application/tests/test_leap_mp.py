@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from orion.leap_mp import LEAP_Z_SIGN, Fusion, HandFinder, LeapMediaPipeSource, Pinhole, Rectifier, View, agreement, backproject, crop_around, preview, search_windows, to_leap_axes, triangulate
+from orion.leap_mp import Fusion, planar_pinch, HandFinder, LeapMediaPipeSource, Pinhole, Rectifier, View, agreement, backproject, crop_around, preview, search_windows, to_leap_axes, triangulate
 from orion.webcam import PALM_LM
 
 
@@ -49,7 +49,8 @@ def scene(z=200.0, flat=False, seed=1):
 
 
 def project_pair(pts, pin=PIN, baseline=BASELINE):
-    """Rectified pixels of `pts` in the left and right camera (the right one sits `baseline` mm to the right)."""
+    """Rectified pixels of `pts` (camera-frame mm of the first camera) in the first camera and in the second, which sits
+    `baseline` mm further along image x. On the Leap the first is the right camera: image x runs toward Leap -x."""
     left = np.column_stack((pin.cx + pin.f * pts[:, 0] / pts[:, 2], pin.cy + pin.f * pts[:, 1] / pts[:, 2]))
     right = np.column_stack((pin.cx + pin.f * (pts[:, 0] - baseline) / pts[:, 2], left[:, 1]))
     return left, right
@@ -79,8 +80,10 @@ def test_triangulate_survives_a_bad_landmark():
 
 
 def test_to_leap_axes():
-    got = to_leap_axes(np.array([[10.0, 5.0, 200.0]]), 40.0)
-    assert got[0] == pytest.approx([-10, 200, 5 * LEAP_Z_SIGN])
+    # image x runs toward Leap -x, y (down in the image) toward the user, z is the height above the device
+    point = np.array([[10.0, 5.0, 200.0]])
+    assert to_leap_axes(point, cam_x=20.0)[0] == pytest.approx([10, 200, 5])  # camera at the Leap's +x side
+    assert to_leap_axes(point, cam_x=-20.0)[0] == pytest.approx([-30, 200, 5])
 
 
 def test_agreement():
@@ -141,23 +144,27 @@ def test_mediapipe_backend_finds_nothing_in_a_blank_crop():
     from orion.webcam import MODEL_FILE
     if not MODEL_FILE.exists():
         pytest.skip("hand model not downloaded yet")
-    assert mediapipe_backend()(np.zeros((240, 240), np.uint8)) == []
+    backend = mediapipe_backend("cpu")
+    try:
+        assert backend(np.zeros((240, 240), np.uint8)) == []
+    finally:
+        backend.close()
 
 
 # ── Fusion ────────────────────────────────────────────────────────────────────
 
-CFG = {"agree_px": 4.0, "hold": 0.08, "hand_mm": 95}
+CFG = {"agree_px": 4.0, "hold": 0.08, "hand_mm": 95, "cameras": "both", "delegate": "cpu"}
 
 
 def views(pts):
     """What the two finders would report for camera-frame points `pts`."""
     world = (pts - pts[list(PALM_LM)].mean(axis=0)) / 1000
-    left, right = project_pair(pts)
-    return View(left, world, "right", 0.9), View(right, world, "right", 0.8)
+    first, second = project_pair(pts)  # the Leap's right camera, then its left
+    return View(second, world, "right", 0.9), View(first, world, "right", 0.8)
 
 
 def expected_palm(pts):
-    return to_leap_axes(pts, BASELINE)[list(PALM_LM)].mean(axis=0)
+    return to_leap_axes(pts, BASELINE / 2)[list(PALM_LM)].mean(axis=0)  # `pts` are in the right camera's frame, at Leap x = +20
 
 
 def test_fusion_agree_gives_a_metric_palm():
@@ -199,18 +206,19 @@ class FakeRectifier:
 
 class FakeFinder:
     def __init__(self, view=None):
-        self.view, self.boom = view, False
+        self.view, self.boom, self.calls = view, False, 0
 
     def find(self, gray):
+        self.calls += 1
         if self.boom:
             raise RuntimeError("detector blew up")
         return self.view
 
 
-def make_source(finders=None):
+def make_source(finders=None, cameras="both"):
     frames, images = [], []
     finders = finders or [FakeFinder(), FakeFinder()]
-    src = LeapMediaPipeSource(frames.append, images.append, cfg={**CFG, "min_score": 0.5},
+    src = LeapMediaPipeSource(frames.append, images.append, cfg={**CFG, "min_score": 0.5, "cameras": cameras},
                               rectifier_factory=lambda conn: FakeRectifier(), finder_factory=iter(finders).__next__)
     assert src._setup()  # a ready source; the real one does this off the frame path
     return src, frames, images, finders
@@ -310,7 +318,7 @@ def test_leap_mp_defaults_load(tmp_path):
     path = tmp_path / "config.toml"
     path.write_text("[leap_mp]\nagree_px = 6.0\n")
     cfg = Config(path)
-    assert cfg["leap_mp"] == {"agree_px": 6.0, "hold": 0.08, "hand_mm": 95, "min_score": 0.5}
+    assert cfg["leap_mp"] == {"agree_px": 6.0, "hold": 0.08, "hand_mm": 95, "min_score": 0.5, "cameras": "left", "delegate": "gpu"}
 
 
 def test_engine_starts_the_leap_mp_source(tmp_path, monkeypatch):
@@ -334,3 +342,130 @@ def test_stop_waits_for_the_worker():
     assert worker.is_alive()
     src.stop()
     assert not worker.is_alive()  # a detection must not still be running when the app (or the interpreter) goes away
+
+
+def test_left_only_mode_never_touches_the_right_camera():
+    class Counting(FakeRectifier):
+        def __init__(self):
+            self.cameras = []
+
+        def rectify(self, camera, gray):
+            self.cameras.append(camera)
+            return gray
+    rect, frames, finders = Counting(), [], [FakeFinder(), FakeFinder()]
+    src = LeapMediaPipeSource(frames.append, lambda img: None, cfg={**CFG, "min_score": 0.5, "cameras": "left"},
+                              rectifier_factory=lambda conn: rect, finder_factory=iter(finders).__next__)
+    assert src._setup()
+    finders[0].view, finders[1].view = views(scene(flat=True))
+    src._process(PAIR, 0.0)
+    assert len(frames[0].hands) == 1 and src.status["agreement"] == "left only"
+    assert rect.cameras == ["left"] and finders[0].calls == 1 and finders[1].calls == 0  # the right image is never rectified or searched
+
+
+# ── MediaPipe delegate: GPU first, CPU if the GPU cannot be used ──────────────
+
+def _model_or_skip():
+    pytest.importorskip("mediapipe")
+    from orion.webcam import MODEL_FILE
+    if not MODEL_FILE.exists():
+        pytest.skip("hand model not downloaded yet")
+
+
+def _on_gpu(options):
+    from mediapipe.tasks import python as tasks
+    return options.base_options.delegate == tasks.BaseOptions.Delegate.GPU
+
+
+def test_backend_falls_back_to_cpu_when_the_gpu_cannot_start(monkeypatch):
+    _model_or_skip()
+    from mediapipe.tasks.python import vision
+    from orion.leap_mp import mediapipe_backend
+    real = vision.HandLandmarker.create_from_options
+
+    def refuse_gpu(options):
+        if _on_gpu(options):
+            raise RuntimeError("no GL context")
+        return real(options)
+    monkeypatch.setattr(vision.HandLandmarker, "create_from_options", refuse_gpu)
+    backend = mediapipe_backend("gpu")
+    try:
+        assert backend.delegate == "cpu" and backend(np.zeros((240, 240), np.uint8)) == []
+    finally:
+        backend.close()
+
+
+def test_backend_falls_back_to_cpu_when_the_gpu_fails_on_a_frame(monkeypatch):
+    _model_or_skip()
+    from mediapipe.tasks.python import vision
+    from orion.leap_mp import mediapipe_backend
+    real = vision.HandLandmarker.create_from_options
+
+    class Broken:
+        def detect(self, image):
+            raise RuntimeError("GL context lost")
+    monkeypatch.setattr(vision.HandLandmarker, "create_from_options", lambda o: Broken() if _on_gpu(o) else real(o))
+    backend = mediapipe_backend("gpu")
+    try:
+        assert backend.delegate == "gpu"
+        assert backend(np.zeros((240, 240), np.uint8)) == [] and backend.delegate == "cpu"  # retried on the CPU, and stays there
+    finally:
+        backend.close()
+
+
+def test_stop_closes_the_backends():
+    class Backend:
+        closed = 0
+
+        def close(self):
+            self.closed += 1
+    backends = [Backend(), Backend()]
+    finders = [FakeFinder(), FakeFinder()]
+    for finder, backend in zip(finders, backends):
+        finder.backend = backend
+    src = make_source(finders)[0]
+    src.stop()
+    assert [b.closed for b in backends] == [1, 1]  # a GPU landmarker holds GL resources until closed
+
+
+def test_planar_pinch_ignores_depth():
+    w = np.zeros((21, 3))
+    w[4], w[8] = (10, 50, 5), (10, -40, 5)  # thumb and index tips on top of each other in the image, 90 mm apart in depth (y)
+    assert planar_pinch(w) == 1.0
+    w[8] = (10 + 60, -40, 5)  # now 60 mm apart in the image
+    assert planar_pinch(w) == 0.0
+
+
+def test_planar_pinch_is_not_a_fist_or_a_thumbs_up():
+    w = np.zeros((21, 3))
+    w[4], w[8] = (10, 0, 5), (10, 0, 6)  # tips together in the image
+    assert planar_pinch(w, grab=0.14) == 1.0  # an OK sign: the other fingers are open
+    assert planar_pinch(w, grab=0.7) == 0.0  # a thumbs up or a fist: the thumb just rests against the curled index
+
+
+def test_fusion_pinch_follows_the_image_not_the_depth(monkeypatch):
+    monkeypatch.setattr("orion.leap_mp.PINCH_MAX_GRAB", 2.0)  # the random scatter of points is not an open hand; the grab gate has its own test
+    pts = scene(flat=True)
+    left, _ = views(pts)
+    left.world = left.world.copy()
+    left.world[8] = left.world[4] + (0, 0, 0.05)  # index tip 50 mm behind the thumb tip, same place in the image
+    (hand,), _ = Fusion({**CFG, "hand_mm": float(np.linalg.norm(pts[9] - pts[0]))}).update(0.0, left, None)
+    assert hand.pinch > 0.9
+
+
+def test_fusion_hand_side_survives_a_few_flipped_labels():
+    pts = scene(flat=True)
+    cfg = {**CFG, "hand_mm": float(np.linalg.norm(pts[9] - pts[0]))}
+    fusion, sides = Fusion(cfg), []
+
+    def feed(t, label):
+        left, _ = views(pts)
+        left.label = label
+        sides.append(fusion.update(t, left, None)[0][0].side)
+    for i in range(20):
+        feed(i * 0.01, "left")
+    for i in range(3):  # MediaPipe briefly guesses the other hand
+        feed(0.2 + i * 0.01, "right")
+    assert set(sides) == {"left"}
+    for i in range(20):  # but a real change of hand does get through
+        feed(0.3 + i * 0.01, "right")
+    assert sides[-1] == "right"

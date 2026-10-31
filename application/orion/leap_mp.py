@@ -5,6 +5,7 @@ The geometry, crop and fusion code is pure numpy; `cv2` and `mediapipe` are impo
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import math
 import threading
@@ -16,14 +17,14 @@ import numpy as np
 
 from .frame import Frame, Hand, IRImage, from_leap
 from .sources import LeapSource, raw_images
-from .webcam import PALM_LM, Cam, Detection, HandTracker, _Track, apparent_depth, points_to_hand
+from .webcam import PALM_LM, PINCH_CLOSED, PINCH_OPEN, Cam, Detection, HandTracker, _Track, apparent_depth, points_to_hand
 
 log = logging.getLogger(__name__)
-LEAP_Z_SIGN = 1  # shortcut: image-down → toward the user is a guess, confirmed against Leap's own tracking in the live bring-up
-SWAP_CAMERAS = False  # shortcut: assumes stereo_left is the physical left camera, confirmed in the live bring-up
-LABEL_FLIP = False  # shortcut: assumes MediaPipe's hand label is right for this view, confirmed in the live bring-up
 DEPTH_MM = (60.0, 600.0)  # a hand over the device: nearer or further is a mismatch, not a hand
 MIN_AGREEING = 18  # of 21 landmarks need a positive disparity
+EXTEND = (0.90, 0.85)  # (on, off) finger straightness; shortcut: MediaPipe under-curls fingers (curled ones read 0.75-0.78, the Leap's 0.63), tuned on one hand
+PINCH_MAX_GRAB = 0.35  # shortcut: an OK sign reads 0.13-0.15, a thumbs up 0.5-0.86; tuned on one hand
+LABEL_FRAMES = 15  # consecutive frames of the other label before the hand's side changes (MediaPipe guesses it per frame)
 SETUP_RETRY_S = 3.0  # wait this long after a failed setup before trying again
 
 
@@ -95,9 +96,11 @@ def backproject(view: View, pinhole: Pinhole, hand_mm: float) -> np.ndarray:
     return palm + w - w[list(PALM_LM)].mean(axis=0)
 
 
-def to_leap_axes(points: np.ndarray, baseline: float) -> np.ndarray:
-    """Left-camera frame → Leap axes (origin between the cameras, y away from the device, z toward the user)."""
-    return np.column_stack((points[:, 0] - baseline / 2, points[:, 2], LEAP_Z_SIGN * points[:, 1]))
+def to_leap_axes(points: np.ndarray, cam_x: float) -> np.ndarray:
+    """A camera's frame (x right and y down in its image, z forward) → Leap axes (y away from the device, z toward the user).
+    `cam_x` is where that camera sits along the Leap's x. Measured against the Leap's own tracking: image x runs toward
+    Leap -x, image y toward +z, and the cameras (LeapExtrinsicCameraMatrix) sit at x = -20 (left) and +20 (right) mm."""
+    return np.column_stack((cam_x - points[:, 0], points[:, 2], points[:, 1]))
 
 
 def agreement(left_px: np.ndarray, right_px: np.ndarray, pinhole: Pinhole, baseline: float, agree_px: float) -> bool:
@@ -159,25 +162,61 @@ class HandFinder:
         return View(px, world, label, score)
 
 
-def mediapipe_backend():
-    """The real backend for `HandFinder`: one single-image MediaPipe hand landmarker, crops upscaled to 256 px."""
+def mediapipe_backend(delegate: str = "gpu"):
+    """The real backend for `HandFinder`: one single-image MediaPipe hand landmarker, crops upscaled to 256 px.
+    Runs on the GPU when asked (about 4× faster than the CPU here), and moves to the CPU for good if the GPU cannot
+    start or fails on a frame; `.delegate` says which is in use."""
     import cv2
     import mediapipe as mp
     from mediapipe.tasks import python as tasks
     from mediapipe.tasks.python import vision
 
     from .webcam import ensure_model
-    landmarker = vision.HandLandmarker.create_from_options(vision.HandLandmarkerOptions(
-        base_options=tasks.BaseOptions(model_asset_path=str(ensure_model())),
-        running_mode=vision.RunningMode.IMAGE, num_hands=1))
+
+    def make(kind):
+        d = tasks.BaseOptions.Delegate.GPU if kind == "gpu" else tasks.BaseOptions.Delegate.CPU
+        return vision.HandLandmarker.create_from_options(vision.HandLandmarkerOptions(
+            base_options=tasks.BaseOptions(model_asset_path=str(ensure_model()), delegate=d),
+            running_mode=vision.RunningMode.IMAGE, num_hands=1))
+
+    def to_cpu(why):
+        log.warning("leap_mp: GPU delegate unusable (%s); running MediaPipe on the CPU", why)
+        backend.delegate, state["landmarker"] = "cpu", make("cpu")
+
+    state = {}
 
     def backend(crop):
         rgb = cv2.cvtColor(cv2.resize(crop, (CROP_INPUT, CROP_INPUT)), cv2.COLOR_GRAY2RGB)
-        r = landmarker.detect(mp.Image(image_format=mp.ImageFormat.SRGB, data=np.ascontiguousarray(rgb)))
+        image = mp.Image(image_format=mp.ImageFormat.SRGB, data=np.ascontiguousarray(rgb))
+        try:
+            r = state["landmarker"].detect(image)
+        except Exception as e:
+            if backend.delegate == "cpu":
+                raise
+            to_cpu(e)
+            r = state["landmarker"].detect(image)
         return [(np.array([(p.x, p.y) for p in img]), np.array([(p.x, p.y, p.z) for p in world]),
                  cats[0].category_name.lower(), cats[0].score)
                 for img, world, cats in zip(r.hand_landmarks, r.hand_world_landmarks, r.handedness)]
+
+    backend.delegate = delegate
+    backend.close = lambda: state["landmarker"].close()
+    try:
+        state["landmarker"] = make(delegate)
+    except Exception as e:
+        if delegate == "cpu":
+            raise
+        to_cpu(e)
     return backend
+
+
+def planar_pinch(w: np.ndarray, grab: float = 0.0) -> float:
+    """Thumb-index pinch, 0..1, from the tips' distance across the image plane (Leap x, z): depth is MediaPipe's weakest axis.
+    Zero for a closed hand: in a fist or a thumbs up the thumb merely rests on the index."""
+    if grab >= PINCH_MAX_GRAB:
+        return 0.0
+    d = float(np.hypot(w[4, 0] - w[8, 0], w[4, 2] - w[8, 2]))
+    return min(max((PINCH_OPEN - d) / (PINCH_OPEN - PINCH_CLOSED), 0.0), 1.0)
 
 
 # ── Two views, one hand ───────────────────────────────────────────────────────
@@ -189,29 +228,39 @@ class Fusion:
     def __init__(self, cfg: dict, pinhole: Pinhole = Pinhole(), baseline: float = 40.0):
         self.cfg, self.pinhole, self.baseline = cfg, pinhole, baseline
         self.smoother, self.track = HandTracker(Cam()), _Track(1)  # one hand: one track, smoothed like the webcam's
+        self._side, self._flips = None, 0
 
     def update(self, t: float, left: View | None, right: View | None) -> tuple[tuple[Hand, ...], str]:
-        if SWAP_CAMERAS:
-            left, right = right, left
+        half = self.baseline / 2
         if left and right:
-            if not agreement(left.px, right.px, self.pinhole, self.baseline, self.cfg["agree_px"]):
+            first, second = right, left  # image x runs toward Leap -x, so the right camera is the pair's first (smaller image x)
+            if not agreement(first.px, second.px, self.pinhole, self.baseline, self.cfg["agree_px"]):
                 return self._held(t), "disagree"
-            points, status = triangulate(left.px, right.px, self.pinhole, self.baseline), "agree"
+            points, cam_x, status = triangulate(first.px, second.px, self.pinhole, self.baseline), half, "agree"
         elif left or right:
             view = left or right
             points = backproject(view, self.pinhole, self.cfg["hand_mm"])
-            status = "left only" if left else "right only"
-            if right:
-                points = points + (self.baseline, 0, 0)  # the right camera's frame sits `baseline` mm to the right of the left's
+            cam_x, status = (-half, "left only") if left else (half, "right only")
         else:
             return self._held(t), "none"
         best = max((v for v in (left, right) if v), key=lambda v: v.score)
-        w = to_leap_axes(points, self.baseline)
+        w = to_leap_axes(points, cam_x)
         palm = w[list(PALM_LM)].mean(axis=0).astype(np.float32)
-        label = best.label if not LABEL_FLIP else ("left" if best.label == "right" else "right")
-        hand = self.smoother._smooth(t, self.track, points_to_hand(w, palm, label, best.score, self.track.extended, 1))
+        raw = points_to_hand(w, palm, self._steady_side(best.label), best.score, self.track.extended, 1, EXTEND)
+        hand = self.smoother._smooth(t, self.track, dataclasses.replace(raw, pinch=planar_pinch(w, raw.grab)))
         self.track.hand, self.track.seen = hand, t
         return (hand,), status
+
+    def _steady_side(self, seen: str) -> str:
+        if self._side is None:
+            self._side = seen
+        elif seen == self._side:
+            self._flips = 0
+        else:
+            self._flips += 1
+            if self._flips >= LABEL_FRAMES:
+                self._side, self._flips = seen, 0
+        return self._side
 
     def _held(self, t: float) -> tuple[Hand, ...]:
         """The last hand while a miss is shorter than `hold`; after that the track starts over."""
@@ -219,7 +268,7 @@ class Fusion:
             return ()
         if t - self.track.seen <= self.cfg["hold"]:
             return (self.track.hand,)
-        self.track = _Track(1)
+        self.track, self._side = _Track(1), None
         return ()
 
 
@@ -270,8 +319,9 @@ class LeapMediaPipeSource(LeapSource):
     def __init__(self, on_frame, on_image, ir_fps: float = 30, *, cfg: dict, rectifier_factory=None, finder_factory=None):
         super().__init__(on_frame, on_image, ir_fps)
         self.cfg = cfg
+        self._left_only = cfg["cameras"] == "left"
         self.rectifier_factory = rectifier_factory or leapc_rectifier
-        self.finder_factory = finder_factory or (lambda: HandFinder(mediapipe_backend(), min_score=cfg["min_score"]))
+        self.finder_factory = finder_factory or (lambda: HandFinder(mediapipe_backend(cfg["delegate"]), min_score=cfg["min_score"]))
         self.on_reference = None  # optional callback for Leap's own frames (the compare script)
         self._slot, self._dropped, self._wake, self._lock = None, 0, threading.Event(), threading.Lock()
         self._rect = self._fusion = self._finders = self._worker = None
@@ -302,6 +352,10 @@ class LeapMediaPipeSource(LeapSource):
         self._wake.set()
         if self._worker is not None:
             self._worker.join(timeout=2)  # let a detection in flight finish rather than die with the process
+        for finder in self._finders or ():
+            close = getattr(getattr(finder, "backend", None), "close", None)
+            if close:
+                close()
 
     # ── Worker ────────────────────────────────────────────────────────────────
 
@@ -339,8 +393,9 @@ class LeapMediaPipeSource(LeapSource):
             return False
         try:
             self._rect = self._rect or self.rectifier_factory(getattr(self, "_conn", None))
-            self._finders = self._finders or (self.finder_factory(), self.finder_factory())
+            self._finders = self._finders or (self.finder_factory(), None if self._left_only else self.finder_factory())
             self._fusion = Fusion(self.cfg, baseline=getattr(self._rect, "baseline", 40.0))
+            self.status["delegate"] = getattr(self._finders[0].backend, "delegate", "")
             self.status["error"] = ""
         except ImportError as e:
             self._broken = True
@@ -356,8 +411,9 @@ class LeapMediaPipeSource(LeapSource):
             if self._fusion is None:
                 self._ensure_setup()
                 return self._emit(t, ())
-            left, right = (self._rect.rectify(c, img) for c, img in zip(("left", "right"), pair))
-            views = (self._finders[0].find(left), self._finders[1].find(right))
+            left = self._rect.rectify("left", pair[0])
+            right = np.zeros_like(left) if self._left_only else self._rect.rectify("right", pair[1])
+            views = (self._finders[0].find(left), None if self._left_only else self._finders[1].find(right))
             hands, self.status["agreement"] = self._fusion.update(t, *views)
             self._emit(t, hands)
             self._emit_ir(lambda: preview(left, right, *views))
