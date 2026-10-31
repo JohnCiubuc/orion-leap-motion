@@ -68,3 +68,22 @@ Unit (TDD, `tests/test_leap_hybrid.py`): `merge` with a synthetic Leap hand and 
 
 - The finger depth scale (MediaPipe over-reads by ~2×) is measured, not corrected, in this round.
 - Everything is tuned on one hand.
+
+## Results (first live `--hybrid` session, 2026-10-30, one hand)
+
+| # | Criterion | Result |
+|---|---|---|
+| 1 | Palm-down touches fire once, nothing extra; palm-up touches silent | **Met.** `touch_middle`, `touch_ring`, `touch_pinky` each fire once; all three palm-up touch phases fire nothing. The right-edge pinky and the four taps did not fire, but the Leap's own distances agree with the hybrid's there (thumb nearer the index than the pinky; mid-tap thumb-to-middle 55 mm on both), so those poses were not performed as touches that time. |
+| 2 | Bent digit not-extended in at least 90 % of frames (index, middle, ring); thumb across the palm | **Met after one fix.** Middle 0 % and ring 0 % extended, thumb 6 % (Leap 4 %) straight away. The index read 100 % extended: the bend is shallow (0.87 straight against an open-finger minimum of 0.912) and sat just above the 0.85 cut-off, so the cut-offs are now 0.90 on / 0.88 off. Replayed: index 0 %, the others 100 %. **Pinky: not met, not required.** MediaPipe cannot see it bend (0.93 straight, same as open); the Leap can (28 % extended). |
+| 3 | Palm-up fist, thumb down and index-up fall back to the Leap | **Partly checkable.** Thumb down and index-up behave as the Leap (index-up: fingers from the Leap in 77 % of frames). In this run the Leap itself lost the hand in the palm-up fist and palm-up pinky phases, so the fallback was not exercised there. |
+| 4 | Palm normal equals the Leap's | **Met.** Difference 0.000 in every phase. |
+| 5 | OrionDo behaves as on the plain Leap | Wired (`frame.leap`, pinned by a test); **the by-hand check is the user's to confirm.** |
+
+Found and fixed during the session:
+- `thumb_down` (a fist) fired `touch_middle`: MediaPipe's grab hovers at 0.66-0.70, right on the 0.7 closed-hand guard, while the Leap reads 1.0. The merged hand now takes the larger of the two grabs (a deviation from "grab from MediaPipe" above).
+- A merged hand whose MediaPipe palm normal points opposite the Leap's now falls back to the Leap's fingers (a flipped normal would mirror the fingers).
+
+Open:
+- **Pinky and thumb-across-palm per finger:** the Leap sees the pinky bend that MediaPipe misses. A per-finger "either tracker says bent" rule for the pinky would fix `flat_pinky_down`; not done, to be decided.
+- **Pinch on a fist from the Leap fallback:** when MediaPipe has no hand, a fist falls back to the Leap's pinch strength, which reads about 0.9 on a fist (`thumb_down` fired `pinch` 3 times). Applying the same closed-hand gate to fallback hands would stop it; not done, to be decided.
+- The 15-25° tilt correction, `thumb_out` and `max_age` are only checked on this session.

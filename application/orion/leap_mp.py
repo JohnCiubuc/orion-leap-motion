@@ -22,7 +22,7 @@ from .webcam import PALM_LM, PINCH_CLOSED, PINCH_OPEN, Cam, Detection, HandTrack
 log = logging.getLogger(__name__)
 DEPTH_MM = (60.0, 600.0)  # a hand over the device: nearer or further is a mismatch, not a hand
 MIN_AGREEING = 18  # of 21 landmarks need a positive disparity
-EXTEND = (0.90, 0.85)  # (on, off) finger straightness; shortcut: MediaPipe under-curls fingers (curled ones read 0.75-0.78, the Leap's 0.63), tuned on one hand
+EXTEND = (0.90, 0.88)  # (on, off) finger straightness; shortcut: MediaPipe under-curls fingers (bent ones read 0.75-0.87, the Leap's 0.63; open ones 0.91+), tuned on one hand
 PINCH_MAX_GRAB = 0.35  # shortcut: an OK sign reads 0.13-0.15, a closed hand 0.5-1.0; tuned on one hand
 LABEL_FRAMES = 15  # consecutive frames of the other label before the hand's side changes (MediaPipe guesses it per frame)
 SETUP_RETRY_S = 3.0  # wait this long after a failed setup before trying again

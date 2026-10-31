@@ -178,3 +178,18 @@ def test_merge_ignores_a_mediapipe_hand_facing_the_other_way():
     leap = make_hand()
     mp = dataclasses.replace(skewed(leap), normal=-skewed(leap).normal)
     assert Merger(CFG)(leap, mp, 0.0) is leap
+
+
+def test_merged_grab_is_the_larger_of_the_two():
+    # A fist reads grab 1.0 on the Leap but only ~0.7 on MediaPipe, right at the closed-hand guard of the touch poses.
+    leap = dataclasses.replace(make_hand(extended=set()), grab=1.0)
+    mp = dataclasses.replace(skewed(leap), grab=0.66)
+    assert Merger(CFG)(leap, mp, 0.0).grab == 1.0
+    assert Merger(CFG)(dataclasses.replace(leap, grab=0.1), dataclasses.replace(mp, grab=0.5), 0.0).grab == 0.5
+
+
+def test_extension_cutoffs_separate_a_shallow_bend_from_an_open_finger():
+    from orion.leap_mp import EXTEND
+    from orion.webcam import _extended
+    assert not _extended(0.87, True, *EXTEND)  # a bent index in the flat-hand session (0.84-0.87)
+    assert _extended(0.912, False, *EXTEND) and _extended(0.912, True, *EXTEND)  # the lowest open index seen
