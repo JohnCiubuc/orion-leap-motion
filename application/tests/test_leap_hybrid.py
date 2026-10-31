@@ -77,3 +77,73 @@ def test_thumb_rule_has_hysteresis():
 def test_thumb_lateral_is_signed():
     assert thumb_lateral(with_thumb_lateral(make_hand(), 40)) == pytest.approx(40, abs=1e-3)
     assert thumb_lateral(with_thumb_lateral(make_hand(), -25)) == pytest.approx(-25, abs=1e-3)
+
+
+# ── The source ────────────────────────────────────────────────────────────────
+
+import time  # noqa: E402
+from types import SimpleNamespace as NS  # noqa: E402
+
+from orion.leap_hybrid import LeapHybridSource  # noqa: E402
+from test_leap_mp import CFG as MP_CFG, PAIR, FakeFinder, FakeRectifier, scene, views  # noqa: E402
+
+
+def leap_hand(hid, side, x=0.0):
+    """A Leap tracking-event hand with every finger reported extended."""
+    v = lambda a, b, c: NS(x=a, y=b, z=c)  # noqa: E731
+    bone = NS(prev_joint=v(x, 200, 0), next_joint=v(x, 210, 0))
+    palm = NS(position=v(x, 200, 0), stabilized_position=v(x, 200, 0), velocity=v(0, 0, 0), normal=v(0, -1, 0), direction=v(0, 0, -1))
+    return NS(id=hid, type=f"HandType.{side.title()}", confidence=0.9, pinch_strength=0.0, grab_strength=0.0, palm=palm,
+              digits=[NS(is_extended=True, bones=[bone] * 4)] * 5)
+
+
+def leap_event(*hands):
+    return NS(timestamp=2_000_000, framerate=110.0, hands=list(hands))
+
+
+def make_hybrid(finders=None):
+    frames = []
+    finders = finders or [FakeFinder(), FakeFinder()]
+    src = LeapHybridSource(frames.append, lambda img: None, cfg={**MP_CFG, "min_score": 0.5}, hybrid=CFG,
+                           rectifier_factory=lambda conn: FakeRectifier(), finder_factory=iter(finders).__next__)
+    return src, frames, finders
+
+
+def test_hybrid_emits_one_merged_frame_per_leap_event():
+    src, frames, _ = make_hybrid()
+    bent_index = dataclasses.replace(make_hand("left", extended={"middle", "ring", "pinky", "thumb"}))
+    src._emit(time.monotonic(), (bent_index,))  # what the MediaPipe worker publishes
+    src._tracking(leap_event(leap_hand(7, "left")))
+    frame = frames[0]
+    assert frame.source == "leap_hybrid" and frame.t == 2.0 and frame.leap.hands[0].extended >= {"index"}
+    assert "index" not in frame.hands[0].extended and frame.hands[0].id == 7  # MediaPipe's flags on the Leap's hand
+    assert src.status["fingers"] == "mediapipe"
+
+
+def test_hybrid_without_mediapipe_is_the_leap():
+    src, frames, _ = make_hybrid()
+    src._tracking(leap_event(leap_hand(7, "left")))
+    assert all(a is b for a, b in zip(frames[0].hands, frames[0].leap.hands)) and src.status["fingers"] == "leap"
+
+
+def test_hybrid_merges_only_the_matching_hand():
+    src, frames, _ = make_hybrid()
+    src._emit(time.monotonic(), (make_hand("left"),))
+    src._tracking(leap_event(leap_hand(7, "left"), leap_hand(8, "right", x=100)))
+    assert frames[0].hands[0] is not frames[0].leap.hands[0] and frames[0].hands[1] is frames[0].leap.hands[1]
+
+
+def test_hybrid_survives_a_merge_error(monkeypatch):
+    src, frames, _ = make_hybrid()
+    src._emit(time.monotonic(), (make_hand("left"),))
+    monkeypatch.setattr(Merger, "__call__", lambda self, *a: 1 / 0)
+    src._tracking(leap_event(leap_hand(7, "left")))
+    assert all(a is b for a, b in zip(frames[0].hands, frames[0].leap.hands)) and src.status["fingers"] == "leap"
+
+
+def test_hybrid_worker_publishes_instead_of_emitting_frames():
+    src, frames, (left, right) = make_hybrid()
+    assert src._setup()
+    left.view, right.view = views(scene())
+    src._process(PAIR, 0.0)
+    assert frames == [] and src._latest[1] is not None

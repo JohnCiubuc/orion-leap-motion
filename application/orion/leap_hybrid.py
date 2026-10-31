@@ -7,10 +7,15 @@ has no fresh hand on the same side. The pure parts need neither OpenCV nor Media
 from __future__ import annotations
 
 import dataclasses
+import logging
+import time
 
 import numpy as np
 
-from .frame import Finger, Hand
+from .frame import Finger, Frame, Hand, from_leap
+from .leap_mp import LeapMediaPipeSource
+
+log = logging.getLogger(__name__)
 
 THUMB_HYSTERESIS = (-5.0, 3.0)  # mm around `thumb_out`: the thumb turns off below the first, on above the second
 
@@ -63,3 +68,34 @@ class Merger:
         elif lateral < low:
             self._thumb = False
         return self._thumb
+
+
+class LeapHybridSource(LeapMediaPipeSource):
+    """One frame per Leap tracking event, with MediaPipe's fingers on the Leap's hand. The MediaPipe worker (inherited from
+    `LeapMediaPipeSource`) only publishes its newest hand. `frame.leap` keeps the Leap's own frame, which OrionDo reads."""
+    name = "leap_hybrid"
+
+    def __init__(self, on_frame, on_image, ir_fps: float = 30, *, cfg: dict, hybrid: dict, rectifier_factory=None, finder_factory=None):
+        super().__init__(on_frame, on_image, ir_fps, cfg=cfg, rectifier_factory=rectifier_factory, finder_factory=finder_factory)
+        self.merger, self._latest = Merger(hybrid), (0.0, None)  # (when, the worker's newest hand or None)
+        self.status["fingers"] = "leap"
+
+    def _emit(self, t: float, hands):
+        self._latest = (t, hands[0] if hands else None)
+
+    def _tracking(self, e):
+        leap = from_leap(e)
+        hands = leap.hands
+        try:
+            t, mp = self._latest
+            age, merged = time.monotonic() - t, []
+            for h in leap.hands:  # one MediaPipe hand: only the first Leap hand on its side takes it
+                m = self.merger(h, mp, age)
+                if m is not h:
+                    mp = None
+                merged.append(m)
+            hands = tuple(merged)
+        except Exception:  # the Leap's own hands are always a good answer
+            log.exception("leap_hybrid: merge failed")
+        self.status["fingers"] = "mediapipe" if any(a is not b for a, b in zip(hands, leap.hands)) else "leap"
+        self.on_frame(Frame(t=leap.t, fps=leap.fps, hands=hands, source=self.name, leap=leap))
