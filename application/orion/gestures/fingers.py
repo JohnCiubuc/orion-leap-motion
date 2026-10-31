@@ -53,6 +53,14 @@ def _tips(h):
     return out
 
 
+CLEAR = 35.0  # mm across the image: a thumb tip this far from a fingertip is clear of it (touching reads 12-25, a thumb folded down 45+)
+
+
+def thumb_gap(h, finger: str) -> float:
+    """Distance across the image plane from the thumb tip to `finger`'s tip, in mm."""
+    return next(d for _, d, name in _tips(h) if name == finger)
+
+
 def thumb_contact(h):
     """The finger whose tip the thumb touches ("index"…"pinky"), or None when nothing, or no single finger, is."""
     near = sorted(t for t in _tips(h) if t[1] < TOUCH)

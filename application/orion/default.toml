@@ -8,6 +8,7 @@ engage_window = 2.0      # seconds a gesture may follow "engage"
 ir_fps = 30              # raw IR stream rate in the dashboard
 port = 0                 # local UI port (0 = random free port)
 auto_wake = 10           # restart the controller after this many seconds without frames (0 = off)
+field_angle = 50          # degrees from straight up: hands (palm and fingertips) beyond this are ignored, as the Leap is jittery near its edge (0 = off)
 preferred_hand = "left"  # side a new hand gets until the tracker is sure: left | right | none
 
 # Webcam source (general.source = "webcam"); needs `pip install -e ".[webcam]"`.

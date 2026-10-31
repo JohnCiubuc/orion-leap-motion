@@ -18,6 +18,7 @@ from .config import DEFAULT_FILE, PLUGIN_DIR, RECORDINGS_DIR, TEMPLATES_FILE, Co
 from .frame import Frame
 from .gestures import REGISTRY, GestureEvent
 from .gestures.paths import PathGesture
+from .field import FieldGate
 from .handedness import Handedness
 from .router import Router
 from .sources import DemoSource, LeapSource, Recorder, ReplaySource
@@ -53,6 +54,11 @@ def _label(mode: str) -> str:
     return mode.replace("_", " ").capitalize()
 
 
+# Gestures that read the Leap's own frame when the source is the hybrid: OrionDo is built on it, and a tap is a fingertip
+# drop in depth, the axis MediaPipe measures worst.
+LEAP_FRAME = ("oriondo", "tap")
+
+
 class Engine:
     def __init__(self, config: Config, demo=False, dry_run=None):
         self.cfg, self.demo = config, demo
@@ -63,6 +69,7 @@ class Engine:
         self.executor = Executor(on_error=lambda a, e: self.emit("error", {"action": a, "error": e}))
         self.router = Router(config, lambda *a: None if self.dry_run else self.executor.submit(*a))
         self.recorder = Recorder(RECORDINGS_DIR)
+        self.field = FieldGate(config)
         self.handedness = Handedness(config)
         self.feed = deque(maxlen=50)  # recent gesture events for the UI
         self.source = self.overlay = None
@@ -131,10 +138,10 @@ class Engine:
     def on_frame(self, frame: Frame):
         self.last_frame = time.monotonic()
         self.recorder.write(frame)  # raw labels, so replays go through the same filter
-        frame = self.handedness(frame)
+        frame = self.handedness(self.field(frame))
         body = self._leap_view(frame)
         with self.lock:
-            events = [e for g in self.gestures for e in g.update(body if body and g.name == "oriondo" else frame)]
+            events = [e for g in self.gestures for e in g.update(body if body and g.name in LEAP_FRAME else frame)]
         for ev in events:
             fired = self.router.route(ev)
             if ev.phase != "update":
@@ -150,7 +157,7 @@ class Engine:
 
     @staticmethod
     def _leap_view(frame: Frame) -> Frame | None:
-        """The hybrid source's own Leap frame, which OrionDo reads, with the sides the handedness filter gave `frame`."""
+        """The hybrid source's own Leap frame, which OrionDo and tap read, with the sides the handedness filter gave `frame`."""
         if frame.leap is None:
             return None
         sides = {h.id: h.side for h in frame.hands}
