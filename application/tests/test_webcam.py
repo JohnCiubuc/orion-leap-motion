@@ -7,7 +7,7 @@ import pytest
 
 from orion.frame import FINGERS
 from orion.sim import make_hand
-from orion.webcam import Cam, Detection, _extended, landmarks_to_hand
+from orion.webcam import Cam, Detection, _extended, landmarks_to_hand, points_to_hand
 
 CAM = Cam(hand_mm=64)  # make_hand's wrist → middle-knuckle is 64 mm
 PALM_LM = (0, 5, 9, 13, 17)
@@ -429,3 +429,10 @@ def test_oriondo_opens_with_open_palm_on_the_webcam(tmp_path):
     cfg.data["general"]["source"] = "leap"
     cfg.data["webcam"]["trigger"] = "open_palm"
     assert trigger() == "peace"  # Leap untouched
+
+
+def test_points_to_hand_reads_a_leap_hand():
+    hand = facing(extended={"index", "middle"})
+    h = points_to_hand(landmarks(hand), palm_of(hand), "right", 0.9)
+    assert h.extended == hand.extended and h.side == "right" and h.pinch == 0
+    assert np.allclose(h.normal, hand.normal, atol=0.1) and np.allclose(h.direction, hand.direction, atol=0.1)

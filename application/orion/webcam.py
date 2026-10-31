@@ -110,6 +110,12 @@ def landmarks_to_hand(det: Detection, cam: Cam, prev_extended: frozenset[str] = 
     a = math.radians(cam.tilt_deg)  # Orion's gestures expect the hand lying flat, as over a Leap: pitch it about the palm
     pitch = np.array(((1, 0, 0), (0, math.cos(a), math.sin(a)), (0, -math.sin(a), math.cos(a))))
     w = (w - w[list(PALM_LM)].mean(axis=0)) @ pitch.T + palm
+    return points_to_hand(w, palm, det.label, det.score, prev_extended, hid)
+
+
+def points_to_hand(w: np.ndarray, palm: np.ndarray, label: str, score: float,
+                   prev_extended: frozenset[str] = frozenset(), hid: int = 0) -> Hand:
+    """The 21 landmarks `w` (mm, Leap axes and position, MediaPipe order) as a `Hand` whose palm is at `palm`."""
     fingers, straight = [], []
     for k, name in enumerate(FINGERS):
         pts = w[4 * k + 1:4 * k + 5]
@@ -118,9 +124,9 @@ def landmarks_to_hand(det: Detection, cam: Cam, prev_extended: frozenset[str] = 
         fingers.append(Finger(name, _extended(straight[-1], name in prev_extended), joints))
     pinch = min(max((PINCH_OPEN - float(np.linalg.norm(w[4] - w[8]))) / (PINCH_OPEN - PINCH_CLOSED), 0.0), 1.0)
     grab = float(np.mean([min(max((GRAB_OPEN - s) / (GRAB_OPEN - GRAB_CLOSED), 0.0), 1.0) for s in straight[1:]]))
-    normal = np.cross(w[5] - w[0], w[17] - w[0]) * (-1 if det.label == "left" else 1)
+    normal = np.cross(w[5] - w[0], w[17] - w[0]) * (-1 if label == "left" else 1)
     direction = w[9] - w[0]
-    return Hand(hid, det.label, det.score, pinch, grab, palm, palm.copy(), np.zeros(3, np.float32),
+    return Hand(hid, label, score, pinch, grab, palm, palm.copy(), np.zeros(3, np.float32),
                 _unit(normal), _unit(direction), tuple(fingers))
 
 
