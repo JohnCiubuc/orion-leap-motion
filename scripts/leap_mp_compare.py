@@ -1,11 +1,13 @@
 """Calibrate and measure the Leap (MediaPipe) source against Leap's own tracking, live, through a guided session.
 
-    ../.venv/bin/python scripts/leap_mp_compare.py [speed] [new]   (speed 1 = ~6 min; 0.2 for a smoke run; `new` = only the newer phases)
+    ../.venv/bin/python scripts/leap_mp_compare.py [--hybrid] [speed] [new]   (speed 1 = ~6 min; 0.2 for a smoke run; `new` = only the newer phases)
 
 Follow the prompts, palm down over the device unless told otherwise. It records both trackers at once, prints a report
 (axis signs and scale from the three sweeps, which poses each tracker fired in each phase, hand side agreement, fingertip
 differences), and saves both recordings (with the phase of every frame) next to your other recordings so thresholds can
 be retuned offline.
+
+`--hybrid` runs the Leap + MediaPipe source instead and compares the merged hands against the Leap's own (`frame.leap`).
 """
 
 import gzip
@@ -22,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "application"))
 from orion.config import RECORDINGS_DIR, Config  # noqa: E402
 from orion.frame import FINGERS, to_dict  # noqa: E402
 from orion.gestures import REGISTRY, load_builtins  # noqa: E402
+from orion.leap_hybrid import LeapHybridSource  # noqa: E402
 from orion.leap_mp import LeapMediaPipeSource  # noqa: E402
 
 # (phase, what to do, seconds, pose that should fire or None)
@@ -91,11 +94,11 @@ def pairs_of(d):
     return out
 
 
-def save(data, stamp):
+def save(data, stamp, hybrid=False):
     """Both trackers' frames, one JSON line each with the phase it was recorded in."""
     RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
     paths = {}
-    for key, name in (("mp", "mediapipe"), ("ref", "leap")):
+    for key, name in (("mp", "hybrid" if hybrid else "mediapipe"), ("ref", "leap")):
         paths[name] = RECORDINGS_DIR / f"{stamp}-calibration-{name}.orec"
         with gzip.open(paths[name], "wt") as fh:
             for phase, d in data.items():
@@ -104,7 +107,7 @@ def save(data, stamp):
     return paths
 
 
-def main(speed, only_new=False):
+def main(speed, only_new=False, hybrid=False):
     global PHASES
     if only_new:
         PHASES = [p for p in PHASES if p[0].startswith(NEW) or p[0] in ("sweep_x", "sweep_y", "sweep_z", "still")]
@@ -114,15 +117,21 @@ def main(speed, only_new=False):
 
     def on_mp(frame):
         if phase[0]:
-            data[phase[0]]["mp"].append((time.monotonic(), frame))
+            now = time.monotonic()
+            data[phase[0]]["mp"].append((now, frame))
             data[phase[0]]["agree"].append(src.status.get("agreement"))
+            if hybrid:  # the hybrid carries the Leap's own frame with every merged one
+                data[phase[0]]["ref"].append((now, frame.leap))
 
     def on_ref(frame):
         if phase[0]:
             data[phase[0]]["ref"].append((time.monotonic(), frame))
 
-    src = LeapMediaPipeSource(on_mp, lambda img: None, cfg=cfg)
-    src.on_reference = on_ref
+    if hybrid:
+        src = LeapHybridSource(on_mp, lambda img: None, cfg=cfg, hybrid=Config()["leap_hybrid"])
+    else:
+        src = LeapMediaPipeSource(on_mp, lambda img: None, cfg=cfg)
+        src.on_reference = on_ref
     src.start()
     time.sleep(3)  # connect, build the rectifier, load the model
     if src.status.get("error"):
@@ -138,7 +147,7 @@ def main(speed, only_new=False):
         time.sleep(seconds * speed)
         phase[0] = None
     src.stop()
-    paths = save(data, time.strftime("%Y-%m-%d_%H-%M-%S"))
+    paths = save(data, time.strftime("%Y-%m-%d_%H-%M-%S"), hybrid)
 
     print("\n══════════ results ══════════")
     print("\nAxis signs and scale (MediaPipe palm vs Leap palm; slope 1.0 and correlation +1.0 are perfect)")
@@ -191,5 +200,5 @@ def main(speed, only_new=False):
 
 
 if __name__ == "__main__":
-    args = [a for a in sys.argv[1:] if a != "new"]
-    main(float(args[0]) if args else 1.0, only_new="new" in sys.argv[1:])
+    args = [a for a in sys.argv[1:] if a not in ("new", "--hybrid")]
+    main(float(args[0]) if args else 1.0, only_new="new" in sys.argv[1:], hybrid="--hybrid" in sys.argv[1:])
